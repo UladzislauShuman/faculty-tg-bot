@@ -3,4 +3,6 @@
 Использует архитектуру RAG
 
 # команды для запуска
-- `python src/index_pipeline.py`
+- проиндексировать данные `python src/index_pipeline.py`
+- выполнить запрос и получить релевантные чанки `python src/query_pipeline.py`
+- получить ответ от LLM модели `python src/rag_bot.py`
