@@ -1,9 +1,10 @@
-# src/query_pipeline.py
-
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+import os
+from dotenv import load_dotenv
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
 
 DB_DIR = "chroma_db"
+load_dotenv()
 MODEL_NAME = "cointegrated/rubert-tiny2"
 
 def search_relevant_documents(query: str):
@@ -37,5 +38,8 @@ def search_relevant_documents(query: str):
     return relevant_docs
 
 if __name__ == "__main__":
-    user_query = "декан факультета в настоящее время"
-    search_relevant_documents(user_query)
+    user_query = os.getenv("USER_QUERY")
+    if not user_query:
+        print("Ошибка: переменная USER_QUERY не найдена в файле .env")
+    else:
+        search_relevant_documents(user_query)

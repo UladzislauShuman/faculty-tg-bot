@@ -1,10 +1,13 @@
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.llms import Ollama
+import os
+from dotenv import load_dotenv
+from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM as Ollama 
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
+load_dotenv()
 DB_DIR = "chroma_db"
 MODEL_NAME = "cointegrated/rubert-tiny2"
 
@@ -38,7 +41,8 @@ PROMPT_TEMPLATE = """
 
 def run_rag_chain(query: str):
     retriever = load_retriever()
-    llm = Ollama(model="gemma3:1b")
+    ollama_model_name = os.getenv("OLLAMA_MODEL")
+    llm = Ollama(model=ollama_model_name)
     prompt = PromptTemplate.from_template(PROMPT_TEMPLATE)
     
     rag_chain = (
@@ -55,5 +59,8 @@ def run_rag_chain(query: str):
     print(response)
 
 if __name__ == "__main__":
-    user_query = "декан факультета в настоящее время"    
-    run_rag_chain(user_query)
+    user_query = os.getenv("USER_QUERY")
+    if not user_query:
+        print("Ошибка: переменная USER_QUERY не найдена в файле .env")
+    else:
+        run_rag_chain(user_query)

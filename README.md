@@ -5,4 +5,4 @@
 # команды для запуска
 - проиндексировать данные `python src/index_pipeline.py`
 - выполнить запрос и получить релевантные чанки `python src/query_pipeline.py`
-- получить ответ от LLM модели `python src/rag_bot.py`
+- получить ответ от LLM модели `python src/rag_bot.py` (перед выполнением необходимо запустить Ollama)
