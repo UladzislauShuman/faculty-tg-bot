@@ -3,6 +3,7 @@
 Использует архитектуру RAG
 
 # команды для запуска
-- проиндексировать данные `python src/index_pipeline.py`
-- выполнить запрос и получить релевантные чанки `python src/query_pipeline.py`
-- получить ответ от LLM модели `python src/rag_bot.py` (перед выполнением необходимо запустить Ollama)
+- проиндексировать данные `python src.index_pipeline`
+- выполнить запрос и получить релевантные чанки `python -m src.query_pipeline`
+- получить ответ от LLM модели `python -m  src.rag_bot` (перед выполнением необходимо запустить Ollama)
+- запустить цикл, где бот отвечает на вопросы из `qa-test-set.yaml`: `python -m src.run_bot` 

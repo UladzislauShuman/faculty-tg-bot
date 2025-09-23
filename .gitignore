@@ -3,3 +3,5 @@ output/
 .venv/
 notes.md
 ignore/
+__pycache__/
+*__init__.py

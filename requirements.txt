@@ -19,5 +19,6 @@ beautifulsoup4
 pandas
 openpyxl
 python-dotenv
+PyYAML
 
 certifi

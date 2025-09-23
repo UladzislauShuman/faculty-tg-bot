@@ -1,4 +1,5 @@
 import os
+from src.util.yaml_parser import load_qa_test_set
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -39,9 +40,9 @@ PROMPT_TEMPLATE = """
 Ответ:
 """
 
-def run_rag_chain(query: str):
+def get_rag_chain():
     retriever = load_retriever()
-    ollama_model_name = os.getenv("OLLAMA_MODEL")
+    ollama_model_name = os.getenv("OLLAMA_MODEL", "saiga")
     llm = Ollama(model=ollama_model_name)
     prompt = PromptTemplate.from_template(PROMPT_TEMPLATE)
     
@@ -51,16 +52,16 @@ def run_rag_chain(query: str):
         | llm
         | StrOutputParser()
     )
-    
-    print("\nЗапрос отправлен в RAG-цепочку...")
-    response = rag_chain.invoke(query)
-    
-    print("\n--- Ответ LLM ---")
-    print(response)
+    return rag_chain
 
 if __name__ == "__main__":
     user_query = os.getenv("USER_QUERY")
     if not user_query:
         print("Ошибка: переменная USER_QUERY не найдена в файле .env")
     else:
-        run_rag_chain(user_query)
+        print("Ретривер успешно загружен.")
+        rag_chain = get_rag_chain()
+        print("\nЗапрос отправлен в RAG-цепочку...")
+        response = rag_chain.invoke(user_query)
+        print("\n--- Ответ LLM ---")
+        print(response)
