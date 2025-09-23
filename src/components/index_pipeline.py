@@ -1,4 +1,5 @@
 import os
+import textwrap
 from dotenv import load_dotenv
 from langchain_community.document_loaders import WebBaseLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -68,11 +69,23 @@ def split_documents(documents: list):
     
     print(f"✅ Документы успешно разделены на {len(chunks)} чанков.")
     
-    if chunks:
-        print("\n--- Пример первого чанка ---")
-        print(chunks[0].page_content)
-        print("\n--- Метаданные первого чанка ---")
-        print(chunks[0].metadata)
+    output_file_path = os.path.join(OUTPUT_DIR, "index_pipeline-output.txt")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(output_file_path, "w", encoding="utf-8") as f:
+        f.write(f"Исходный документ: {documents[0].metadata.get('source', 'N/A')}\n")
+        f.write(f"Всего чанков: {len(chunks)}\n")
+        f.write("="*80 + "\n\n")
+
+        for i, chunk in enumerate(chunks):
+            f.write(f"--- ЧАНК #{i+1} ---\n")
+            f.write(f"Метаданные: {chunk.metadata}\n")
+            f.write("-" * 20 + "\n")
+            # Используем textwrap для форматирования
+            wrapped_text = textwrap.fill(chunk.page_content, width=100)
+            f.write(wrapped_text)
+            f.write("\n\n" + "="*80 + "\n\n")
+            
+    print(f"✅ Все чанки сохранены в файл: {output_file_path}")
 
     return chunks
 
