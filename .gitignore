@@ -5,3 +5,4 @@ notes.md
 ignore/
 __pycache__/
 *__init__.py
+chroma_db/
