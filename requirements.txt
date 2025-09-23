@@ -1,0 +1,25 @@
+langchain
+langchain-huggingface
+langchain-community
+langchain-chroma
+langchain-ollama
+yandexcloud
+unstructured
+
+# for embedding models from Hugging Face
+sentence-transformers
+
+# local Vector DB
+chromadb
+
+# HTML parsing
+beautifulsoup4
+
+
+# parsing Excel, CSV
+pandas
+openpyxl
+python-dotenv
+PyYAML
+
+certifi
