@@ -3,6 +3,7 @@ langchain-huggingface
 langchain-community
 langchain-chroma
 langchain-ollama
+yandexcloud
 unstructured
 
 # for embedding models from Hugging Face

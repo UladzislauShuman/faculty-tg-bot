@@ -1,9 +1,10 @@
-import os # <-- ДОБАВЛЕНО
-from dotenv import load_dotenv # <-- ДОБАВЛЕНО
+import os
+from dotenv import load_dotenv
 from src.components.rag_bot import get_rag_chain
 from src.util.yaml_parser import load_qa_test_set
 
-QA_FILE_PATH = "qa-test-set.yaml"
+load_dotenv()
+QA_FILE_PATH = os.getenv("QA_FILE_PATH", "qa-test-set.yaml")
 
 def run_evaluation():
     # Загружаем тестовый набор
