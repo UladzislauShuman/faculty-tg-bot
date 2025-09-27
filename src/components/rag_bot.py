@@ -7,6 +7,10 @@ from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+
 from langchain_ollama import OllamaLLM as Ollama
 from langchain_community.llms import YandexGPT 
 
@@ -56,32 +60,33 @@ def get_llm_from_config(provider_config: dict):
         raise ValueError(f"Неизвестный тип провайдера LLM: {provider_type}")
 
 def get_rag_chain():
-    # 1. Загружаем общую конфигурацию
     try:
         with open('config.yaml', 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
     except FileNotFoundError:
         raise FileNotFoundError("Файл config.yaml не найден в корневой папке.")
-
-    # 2. Определяем, какого провайдера использовать, из .env файла
     provider_name = os.getenv("LLM_PROVIDER")
-    if not provider_name:
-        raise ValueError("Переменная LLM_PROVIDER не установлена в .env файле.")
-    
-    # 3. Находим конфигурацию для этого провайдера в config.yaml
     provider_config = config.get('providers', {}).get(provider_name)
-    if not provider_config:
-        raise ValueError(f"Конфигурация для провайдера '{provider_name}' не найдена в config.yaml.")
-
-    # 4. Создаем экземпляр LLM
     llm = get_llm_from_config(provider_config)
     
-    # 5. Собираем RAG-цепочку
-    retriever = load_retriever()
+    # базовый ретривер, который ищет по векторам
+    base_retriever = load_retriever()
+    
+    # инициализируем модель-кросс-энкодер.
+    cross_encoder_model = HuggingFaceCrossEncoder(model_name="cross-encoder/ms-marco-MiniLM-L-6-v2")
+    
+    # создаем "компрессор", который будет использовать модель для переранжировки
+    compressor = CrossEncoderReranker(model=cross_encoder_model, top_n=3)
+    
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor, base_retriever=base_retriever
+    )
+    print("✅ Ретривер с Re-ranker'ом успешно создан.")
+    
     prompt = PromptTemplate.from_template(PROMPT_TEMPLATE)
     
     rag_chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
+        {"context": compression_retriever, "question": RunnablePassthrough()}
         | prompt
         | llm
         | StrOutputParser()

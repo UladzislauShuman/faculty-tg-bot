@@ -8,10 +8,10 @@
 - установить все зависимости `pip install -r requirements.txt`
 
 ## команды для покомпонентного запуска
-- проиндексировать данные `python src.components.index_pipeline`
+- проиндексировать данные `python -m src.components.index_pipeline`
 - выполнить запрос и получить релевантные чанки `python -m src.components.query_pipeline`
 - получить ответ от LLM модели `python -m  src.components.rag_bot` (перед выполнением необходимо запустить Ollama)
 
 ## команды для запуска цикла вопросов
-- запустить цикл, где бот показывает полученные при поиске документы на вопросы из `qa-test-set.yaml`: `python -m src.runners.run_queries.py` 
+- запустить цикл, где бот показывает полученные при поиске документы на вопросы из `qa-test-set.yaml`: `python -m src.runners.run_retriver` 
 - запустить цикл, где бот отвечает на вопросы из `qa-test-set.yaml`: `python -m src.runners.run_bot` 
