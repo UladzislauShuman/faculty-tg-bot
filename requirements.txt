@@ -1,5 +1,6 @@
 langchain
 langchain-huggingface
+langchain-experimental
 langchain-community
 langchain-chroma
 langchain-ollama
@@ -23,3 +24,7 @@ python-dotenv
 PyYAML
 
 certifi
+
+dependency-injector
+rank-bm25
+lxml

@@ -1,9 +1,0 @@
-providers:
-  ollama:
-    type: ollama
-    model: "gemma3:1b" 
-  
-  yandex_gpt:
-    type: yandex_gpt
-    model: "yandexgpt-lite"
-    secret: "YOUR_YANDEX_SECRET_KEY_HERE" 

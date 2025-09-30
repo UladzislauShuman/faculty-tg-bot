@@ -7,11 +7,12 @@
 ## команды инициализации
 - установить все зависимости `pip install -r requirements.txt`
 
-## команды для покомпонентного запуска
-- проиндексировать данные `python -m src.components.index_pipeline`
-- выполнить запрос и получить релевантные чанки `python -m src.components.query_pipeline`
-- получить ответ от LLM модели `python -m  src.components.rag_bot` (перед выполнением необходимо запустить Ollama)
-
-## команды для запуска цикла вопросов
-- запустить цикл, где бот показывает полученные при поиске документы на вопросы из `qa-test-set.yaml`: `python -m src.runners.run_retriver` 
-- запустить цикл, где бот отвечает на вопросы из `qa-test-set.yaml`: `python -m src.runners.run_bot` 
+## команды для проверки работоспособности 
+### indexing
+- `python main.py index`
+### retrieve
+- `python main.py retrieve` -- по всем вопросам из qa-test-set.yaml и вывод в output/run_retriever-output.txt
+- `python main.py retrieve --query "какие научные школы существуют на факультете?"` -- по конкретному вопросу, все выводиться в консоль
+### full rag
+- `python main.py answer` -- по всем вопросам из qa-test-set.yaml и вывод в output/run_bot-output.txt
+- `python main.py answer --query "кто был первым деканом?"` -- по конкретному вопросу, все выводиться в консоль
