@@ -1,0 +1,45 @@
+
+# 1. Настройки источников данных
+data_source:
+  type: web
+  url: "https://fpmi.bsu.by/about"
+
+# 2. Настройки Embedding-модели
+embedding_model:
+  name: "cointegrated/rubert-tiny2"
+  device: "cpu"
+
+# 3. Настройки Ретриверов
+retrievers:
+  # Настройки для векторного поиска
+  vector_store:
+    db_path: "data/chroma_db"
+    search_k: 5 # Сколько документов изначально искать
+  
+  # Настройки для поиска по ключевым словам
+  bm25:
+    index_path: "data/bm25_index.pkl"
+  
+  # Настройки для Re-ranker'а
+  reranker:
+    model: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    top_n: 3
+
+# 4. Настройки LLM-провайдеров
+providers:
+  ollama:
+    type: ollama
+    model: "gemma3:1b" 
+  
+  yandex_gpt:
+    type: yandex_gpt
+    model: "yandexgpt-lite"
+    secret: "YOUR_YANDEX_SECRET_KEY_HERE"
+
+# 5. Настройки путей
+paths:
+  output_dir: "output"
+  qa_test_set: "qa-test-set.yaml"
+  indexing: "indexing.txt"
+  run_bot: "answer.txt"
+  retriever: "retriever.txt"
