@@ -3,6 +3,8 @@
 data_source:
   type: web
   url: "https://fpmi.bsu.by/about"
+  max_depth: 10
+  sitemap_only: false
 
 # 2. Настройки Embedding-модели
 embedding_model:
@@ -43,3 +45,4 @@ paths:
   indexing: "indexing.txt"
   run_bot: "answer.txt"
   retriever: "retriever.txt"
+  sitemap: "sitemap.txt"

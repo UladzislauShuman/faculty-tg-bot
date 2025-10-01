@@ -17,8 +17,12 @@ def main():
     parser = argparse.ArgumentParser(description="RAG Pipeline for University Bot")
     subparsers = parser.add_subparsers(dest="command", required=True, help="Available commands")
 
-    # Команда для индексации
+    # Команда только для полной индексации
     parser_index = subparsers.add_parser("index", help="Run the full data indexing pipeline.")
+
+    # Команда только для построения карты сайта
+    parser_sitemap = subparsers.add_parser("sitemap",
+                                           help="Only crawl the site and build the sitemap.txt file.")
 
     # Команда для тестирования ретривера
     parser_retrieve = subparsers.add_parser("retrieve", help="Test the retrieval part of the pipeline.")
@@ -37,9 +41,13 @@ def main():
         print("❌ Ошибка: Файл config/config.yaml не найден.")
         sys.exit(1)
 
-    
     if args.command == 'index':
-        run_indexing(config_data)
+      config_data['data_source']['sitemap_only'] = False
+      run_indexing(config_data)
+
+    elif args.command == 'sitemap':
+      config_data['data_source']['sitemap_only'] = True
+      run_indexing(config_data)
     
     elif args.command == 'retrieve':
         container = Container()
