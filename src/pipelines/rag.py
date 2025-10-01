@@ -84,27 +84,56 @@ def create_final_retriever(config: dict):
     print("✅ Финальный ретривер с Re-ranker'ом успешно создан.")
     return compression_retriever
 
+
 def create_rag_chain(config: dict, retriever):
+  """
+  Собирает и возвращает финальный ретривер (гибридный + Re-ranker).
+  """
+  provider_name = os.getenv("LLM_PROVIDER")
+  provider_config = config.get('providers', {}).get(provider_name)
+  llm = get_llm_from_config(provider_config)
+
+  # --- QUERY EXPANSION ---
+  query_expansion_prompt = PromptTemplate.from_template(
+    QUERY_EXPANSION_TEMPLATE)
+  # Используем ту же LLM для генерации синонимов
+  query_expansion_chain = query_expansion_prompt | llm | StrOutputParser()
+
+  def expand_and_retrieve(query: str):
     """
-    Собирает полную RAG-цепочку, используя уже готовый ретривер.
+    Функция, которая сначала расширяет запрос, а потом ищет по всем версиям
     """
-    provider_name = os.getenv("LLM_PROVIDER")
-    provider_config = config.get('providers', {}).get(provider_name)
-    llm = get_llm_from_config(provider_config)
-    
-    # --- Query Expansion 
-    # query_expansion_prompt = PromptTemplate.from_template(QUERY_EXPANSION_TEMPLATE)
-    # query_expansion_chain = query_expansion_prompt | llm | StrOutputParser()
-    # def expand_and_retrieve(query: str): ...
-    
-    prompt = PromptTemplate.from_template(PROMPT_TEMPLATE)
-    
-    rag_chain = (
-        {"context": retriever, "question": RunnablePassthrough()}
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    
-    print("✅ Полная гибридная RAG-цепочка успешно создана.")
-    return rag_chain
+    print(f"\n--- Расширение запроса: '{query}' ---")
+    expanded_queries_str = query_expansion_chain.invoke({"question": query})
+    all_queries = [query] + expanded_queries_str.strip().split('\n')
+    # Убираем пустые строки на всякий случай
+    all_queries = [q for q in all_queries if q]
+    print(f"Всего запросов для поиска: {all_queries}")
+
+    all_docs = []
+    for q in all_queries:
+      # Для каждого запроса используем наш финальный ретривер (с Re-ranker'ом)
+      all_docs.extend(retriever.invoke(q))
+
+    # Убираем дубликаты, сохраняя порядок
+    unique_docs_dict = {}
+    for doc in all_docs:
+      if doc.page_content not in unique_docs_dict:
+        unique_docs_dict[doc.page_content] = doc
+
+    unique_docs = list(unique_docs_dict.values())
+    print(
+      f"Найдено {len(unique_docs)} уникальных и переранжированных документов.")
+    return unique_docs
+
+  prompt = PromptTemplate.from_template(PROMPT_TEMPLATE)
+
+  rag_chain = (
+      {"context": expand_and_retrieve, "question": RunnablePassthrough()}
+      | prompt
+      | llm
+      | StrOutputParser()
+  )
+
+  print("✅ Полная гибридная RAG-цепочка c Query Expansion успешно создана.")
+  return rag_chain
