@@ -5,10 +5,22 @@ data_source:
   url: "https://fpmi.bsu.by/about"
   max_depth: 10
   sitemap_only: false
+  test_urls:
+    # qa-test-set.yaml
+    - "https://fpmi.bsu.by/olympiads"
+    - "https://fpmi.bsu.by/dean-office"
+    - "https://fpmi.bsu.by/master-degree"
+    - "https://fpmi.bsu.by/enrollee"
+    - "https://fpmi.bsu.by/about"
+    # остальные
+    - "https://fpmi.bsu.by/faculty"
+    - "https://fpmi.bsu.by/educational-process"
+#    - "https://fpmi.bsu.by/graduate"
+#    - "https://fpmi.bsu.by/science"
 
 # 2. Настройки Embedding-модели
 embedding_model:
-  name: "cointegrated/rubert-tiny2"
+  name: "intfloat/multilingual-e5-large" # "cointegrated/rubert-tiny2"
   device: "cpu"
 
 # 3. Настройки Ретриверов
@@ -31,7 +43,7 @@ retrievers:
 providers:
   ollama:
     type: ollama
-    model: "gemma3:1b" 
+    model: "llama3.1" # "gemma3:1b"
   
   yandex_gpt:
     type: yandex_gpt
@@ -46,3 +58,4 @@ paths:
   run_bot: "answer.txt"
   retriever: "retriever.txt"
   sitemap: "sitemap.txt"
+  test_pages_source: "test_pages_source.html"
