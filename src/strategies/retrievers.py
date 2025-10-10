@@ -6,7 +6,23 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
+from langchain_core.embeddings import Embeddings
 
+
+class E5QueryEmbeddings(Embeddings):
+  """
+  Класс-обертка для моделей e5, который автоматически добавляет
+  префикс 'query: ' к каждому запросу перед векторизацией.
+  """
+
+  def __init__(self, base_embeddings: Embeddings):
+    self.base_embeddings = base_embeddings
+
+  def embed_documents(self, texts: List[str]) -> List[List[float]]:
+    return self.base_embeddings.embed_documents(texts)
+
+  def embed_query(self, text: str) -> List[float]:
+    return self.base_embeddings.embed_query(f"query: {text}")
 
 class HybridRetrieverFactory:
   """
@@ -32,18 +48,25 @@ class HybridRetrieverFactory:
     #    'model_name' - указывает, какую модель с Hugging Face использовать.
     #    'model_kwargs' - позволяет передать параметры для модели, например,
     #                     на каком устройстве ее запускать ('cpu' или 'cuda').
-    embeddings_model = HuggingFaceEmbeddings(
-        model_name=self.config['embedding_model']['name'],
-        model_kwargs={'device': self.config['embedding_model']['device']}
+    model_name = self.config['embedding_model']['name']
+    device = self.config['embedding_model']['device']
+
+    base_embeddings = HuggingFaceEmbeddings(
+        model_name=model_name,
+        model_kwargs={'device': device},
+        encode_kwargs={'normalize_embeddings': True}
     )
 
-    # 2. Chroma: Класс для работы с ChromaDB.
-    #    'persist_directory' - указывает на папку, где хранятся файлы базы.
-    #    'embedding_function' - связывает базу с моделью, которая будет
-    #                           использоваться для векторизации запросов.
+    if "e5" in model_name:
+      print(
+        "Обнаружена модель e5. Используем обертку для добавления префикса 'query: ' к запросам.")
+      embeddings_for_query = E5QueryEmbeddings(base_embeddings)
+    else:
+      embeddings_for_query = base_embeddings
+
     vector_store = Chroma(
         persist_directory=self.config['retrievers']['vector_store']['db_path'],
-        embedding_function=embeddings_model
+        embedding_function=embeddings_for_query
     )
 
     return vector_store.as_retriever(
