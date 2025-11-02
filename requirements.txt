@@ -5,7 +5,9 @@ langchain-community
 langchain-chroma
 langchain-ollama
 yandexcloud
-unstructured
+unstructured[local-inference]
+markdownify
+langchain-text-splitters
 
 # for embedding models from Hugging Face
 sentence-transformers
@@ -15,7 +17,6 @@ chromadb
 
 # HTML parsing
 beautifulsoup4
-
 
 # parsing Excel, CSV
 pandas
