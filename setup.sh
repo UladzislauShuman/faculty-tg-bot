@@ -33,8 +33,6 @@ echo -e "      ${GREEN}✓ Модель успешно загружена.${NC}"
 
 # --- Шаг 4: Миграции БД ---
 echo -e "\n${YELLOW}4/6. Применение миграций базы данных...${NC}"
-# Создаем миграцию (на случай если ее нет) и применяем
-docker-compose exec rag-cli alembic revision --autogenerate -m "Auto migration" 2>/dev/null || true
 docker-compose exec rag-cli alembic upgrade head
 echo -e "      ${GREEN}✓ База данных готова.${NC}"
 
