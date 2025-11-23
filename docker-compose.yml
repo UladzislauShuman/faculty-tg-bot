@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: rag_bot_service
+    entrypoint: ["python", "-m", "src.tg_bot.server-startup"]
+    ports:
+      - "8080:8080"
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - TGSERVER__TOKEN=${TGSERVER__TOKEN}
+      - TGSERVER__WEBHOOK_URL=${TGSERVER__WEBHOOK_URL}
+      - DB__HOST=postgres
+      - DB__PORT=5432
+      - DB__NAME=${DB__NAME}
+      - DB__USER=${DB__USER}
+      - DB__PASS=${DB__PASS}
+      - LLM_PROVIDER=ollama
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./qa-test-set.yaml:/app/qa-test-set.yaml
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+
+  rag-cli:
+    build: .
+    container_name: rag_cli_prod
+    entrypoint: ["tail", "-f", "/dev/null"]
+    environment:
+      - OLLAMA_HOST=http://ollama:11434
+      - DB__HOST=postgres
+      - DB__PORT=5432
+      - DB__NAME=${DB__NAME}
+      - DB__USER=${DB__USER}
+      - DB__PASS=${DB__PASS}
+      - LLM_PROVIDER=ollama
+      - TGSERVER__TOKEN=${TGSERVER__TOKEN}
+      - TGSERVER__WEBHOOK_URL=${TGSERVER__WEBHOOK_URL}
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./qa-test-set.yaml:/app/qa-test-set.yaml
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+
+  ollama:
+    image: ollama/ollama
+    container_name: ollama_service_prod
+    volumes:
+      - ./ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+
+  # --- СЕРВИС БАЗЫ ДАННЫХ (Postgres) ---
+  postgres:
+    image: postgres:16
+    container_name: rag_postgres_prod
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${DB__NAME}
+      POSTGRES_USER: ${DB__USER}
+      POSTGRES_PASSWORD: ${DB__PASS}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB__USER} -d ${DB__NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+    driver: local

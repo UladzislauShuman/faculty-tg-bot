@@ -8,3 +8,6 @@ chroma_db/
 /data
 /QA.txt
 .env
+hf_cache/
+ollama_data/
+.idea/
