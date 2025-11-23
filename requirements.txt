@@ -1,31 +1,39 @@
-langchain
-langchain-huggingface
-langchain-experimental
-langchain-community
-langchain-chroma
-langchain-ollama
-yandexcloud
-unstructured[local-inference]
-markdownify
-langchain-text-splitters
+# --- LangChain ---
+langchain==0.3.7
+langchain-community==0.3.7
+langchain-core>=0.3.21
+langchain-text-splitters==0.3.2
+langchain-chroma==0.1.4
+langchain-huggingface==0.1.0
+langchain-ollama>=0.2.1
 
-# for embedding models from Hugging Face
+aiogram
+pydantic-settings
+
+# --- Database ---
+sqlalchemy
+alembic
+asyncpg
+psycopg2-binary
+
+# --- Vector DB & Search ---
+chromadb
+rank-bm25
 sentence-transformers
 
-# local Vector DB
-chromadb
-
-# HTML parsing
+# --- Parsing & Data Processing ---
 beautifulsoup4
-
-# parsing Excel, CSV
+lxml
+markdownify
+requests
 pandas
 openpyxl
+unstructured
+unstructured-inference
+unstructured-client
+
+# --- Utilities ---
 python-dotenv
 PyYAML
-
-certifi
-
 dependency-injector
-rank-bm25
-lxml
+yandexcloud

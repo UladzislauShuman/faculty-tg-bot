@@ -1,17 +1,20 @@
 import os
 from dotenv import load_dotenv
 
-from langchain.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda, Runnable
+from langchain_core.prompts import PromptTemplate
+from langchain_core.runnables import Runnable, RunnableLambda, RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.retrievers import BaseRetriever
 
 from langchain_community.llms import YandexGPT
 from langchain_ollama import OllamaLLM as Ollama
 
-from langchain.retrievers import ContextualCompressionRetriever
-from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+
+from langchain.retrievers.multi_query import MultiQueryRetriever
+from langchain.retrievers.contextual_compression import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+
 from src.retrievers.hybrid_retriever_factory import create_hybrid_retriever
 
 load_dotenv()
@@ -70,6 +73,33 @@ QUERY_EXPANSION_TEMPLATE = """
 Версии:
 """
 
+HYDE_PROMPT_TEMPLATE = """
+Ты — эксперт-помощник. Твоя задача — на основе вопроса пользователя написать краткий, гипотетический ответ на него.
+Представь, что ты уже знаешь ответ, и напиши его в виде одного абзаца. Не используй фразы вроде "Ответ на ваш вопрос..." или "Согласно информации...".
+Просто напиши сам факт.
+
+Вопрос: {question}
+Гипотетический ответ:
+"""
+
+MULTI_QUERY_PROMPT_TEMPLATE = """
+You are an AI language model assistant. Your task is to generate 3 different versions of the given user question in Russian to retrieve relevant documents from a vector database.
+Provide these alternative questions separated by newlines. Do not use any prefixes like numbers or bullet points.
+
+<example>
+Original question: кто был первым деканом?
+Generated queries:
+кем руководил факультет при его основании
+кого можно считать первоначальным лидером ФПМИ
+кому принадлежал титул первого директора факультета прикладной математики и информатики
+</example>
+
+<task>
+Original question: {question}
+Generated queries:
+</task>
+"""
+
 
 def get_llm_from_config(provider_config: dict):
   """Создает и возвращает экземпляр LLM на основе конфигурации."""
@@ -77,11 +107,17 @@ def get_llm_from_config(provider_config: dict):
 
   if provider_type == "ollama":
     print(
-      f"Инициализация LLM от Ollama с моделью: {provider_config.get('model')}")
-    return Ollama(model=provider_config.get("model"))
+        f"Инициализация LLM от Ollama с моделью: {provider_config.get('model')}")
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+    print(f"  - Адрес Ollama: {ollama_host}")
+
+    return Ollama(
+        model=provider_config.get("model"),
+        base_url=ollama_host
+    )
   elif provider_type == "yandex_gpt":
     print(
-      f"Инициализация LLM от YandexGPT с моделью: {provider_config.get('model')}")
+        f"Инициализация LLM от YandexGPT с моделью: {provider_config.get('model')}")
     secret_key = provider_config.get("secret")
     if not secret_key or secret_key == "YOUR_YANDEX_SECRET_KEY_HERE":
       raise NotImplementedError("YandexGPT требует API-ключ в config.yaml.")
@@ -125,7 +161,7 @@ def _expand_query_and_retrieve(query: str, retriever: BaseRetriever,
   llm = get_llm_from_config(provider_config)
 
   query_expansion_prompt = PromptTemplate.from_template(
-    QUERY_EXPANSION_TEMPLATE)
+      QUERY_EXPANSION_TEMPLATE)
   query_expansion_chain = query_expansion_prompt | llm | StrOutputParser()
 
   expanded_queries_str = query_expansion_chain.invoke({"question": query})
@@ -149,8 +185,9 @@ def _expand_query_and_retrieve(query: str, retriever: BaseRetriever,
   unique_docs = list(unique_docs_dict.values())
 
   print(
-    f"Найдено {len(unique_docs)} уникальных и переранжированных документов.")
+      f"Найдено {len(unique_docs)} уникальных и переранжированных документов.")
   return unique_docs
+
 
 def create_retrieval_chain(config: dict,
     retriever: BaseRetriever) -> Runnable:
@@ -160,11 +197,36 @@ def create_retrieval_chain(config: dict,
   """
 
   # Создаем "замыкание" (closure), чтобы передать retriever и config в RunnableLambda
+  # def retrieval_closure(query: str):
+  #   return _expand_query_and_retrieve(query, retriever, config)
+
   def retrieval_closure(query: str):
-    return _expand_query_and_retrieve(query, retriever, config)
+    print(f"🔍 Быстрый поиск по запросу: '{query}'")
+    return retriever.invoke(query)
 
   return RunnableLambda(retrieval_closure)
 
+# def create_retrieval_chain(config: dict,
+#     retriever: BaseRetriever) -> Runnable:
+#   """
+#   Создает и возвращает цепочку ретривинга, используя MultiQueryRetriever.
+#   """
+#   provider_name = os.getenv("LLM_PROVIDER", "ollama")
+#   provider_config = config.get('providers', {}).get(provider_name)
+#   llm = get_llm_from_config(provider_config)
+#
+#   # Используем готовый MultiQueryRetriever из LangChain.
+#   retrieval_chain = MultiQueryRetriever.from_llm(
+#       retriever=retriever,
+#       llm=llm,
+#       prompt=PromptTemplate(template=MULTI_QUERY_PROMPT_TEMPLATE,
+#                             input_variables=["question"]),
+#       include_generated_queries=True,
+#   )
+#
+#   print(
+#     "✅ Цепочка ретривинга с MultiQueryRetriever (с логированием) успешно создана.")
+#   return retrieval_chain
 
 def create_rag_chain(config: dict, retriever: BaseRetriever):
   """

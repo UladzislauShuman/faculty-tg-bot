@@ -10,6 +10,10 @@ from src.parsing_and_chunking.configurable_processor import ConfigurableProcesso
 from src.parsing_and_chunking.chunkers.semantic_html_chunker import SemanticHTMLChunker
 from src.parsing_and_chunking.chunkers.html_context_chunker import HTMLContextChunker
 
+from src.tg_bot.repositories.interfaces import IUserRepository, IAnswerRepository
+from src.tg_bot.repositories.implementations import UserRepository, AnswerRepository
+from src.tg_bot.services.interfaces import IUserService, IAnswerService
+from src.tg_bot.services.implementations import UserService, AnswerService
 
 class Container(containers.DeclarativeContainer):
   """
@@ -65,4 +69,20 @@ class Container(containers.DeclarativeContainer):
     markdown_processor
     # configurable_semantic_processor
     # unstructured_processor
+  )
+
+  # --- Компоненты Telegram-бота ---
+
+  # Репозитории для бота
+  bot_user_repo = providers.Singleton(UserRepository)
+  bot_answer_repo = providers.Singleton(AnswerRepository)
+
+  # Сервисы для бота
+  bot_user_service = providers.Factory(
+      UserService,
+      user_repo=bot_user_repo
+  )
+  bot_answer_service = providers.Factory(
+      AnswerService,
+      answer_repo=bot_answer_repo
   )
