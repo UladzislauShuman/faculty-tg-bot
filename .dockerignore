@@ -1,0 +1,17 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+.idea
+.git
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.base.yml
+README.md
+notes.md
+output/
+ollama_data/
+QA.txt
