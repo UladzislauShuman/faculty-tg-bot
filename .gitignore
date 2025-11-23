@@ -6,3 +6,5 @@ ignore/
 __pycache__/
 chroma_db/
 /data
+/QA.txt
+.env
