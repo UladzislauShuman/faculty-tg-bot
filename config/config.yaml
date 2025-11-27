@@ -11,7 +11,7 @@ data_source:
     - "https://fpmi.bsu.by/dean-office"
     - "https://fpmi.bsu.by/master-degree"
     - "https://fpmi.bsu.by/olympiads"
-    # Дополнительные страницы для проверки разных типов контента
+
     - "https://fpmi.bsu.by/departments"
     - "https://fpmi.bsu.by/famcs_in_the_media"
 
