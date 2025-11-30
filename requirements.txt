@@ -19,7 +19,7 @@ psycopg2-binary
 # --- Vector DB & Search ---
 chromadb
 rank-bm25
-sentence-transformers
+sentence-transformers>=3.0.0
 
 # --- Parsing & Data Processing ---
 beautifulsoup4
@@ -37,3 +37,5 @@ python-dotenv
 PyYAML
 dependency-injector
 yandexcloud
+numpy<2.0.0
+scikit-learn>=1.5.0

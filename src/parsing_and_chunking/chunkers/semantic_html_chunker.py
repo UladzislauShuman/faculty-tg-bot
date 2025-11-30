@@ -1,113 +1,158 @@
-from typing import List, Dict
-from bs4 import BeautifulSoup, Tag
+from typing import List
+from bs4 import BeautifulSoup, NavigableString, Tag
 from langchain_core.documents import Document
 from src.interfaces.chunker_interfaces import ChunkerInterface
 
 
 class SemanticHTMLChunker(ChunkerInterface):
   """
-  Семантический чанкер, который решает проблему "грязной" верстки.
-  Стратегии:
-  1.  Рекурсивный обход: ищет теги на любой глубине вложенности.
-  2.  Иерархия заголовков: отслеживает последний h1, h2, h3 и т.д. для создания точного контекста.
-  3.  Гранулярность: создает чанки из небольших смысловых единиц (p, li, tr).
-  4.  Обогащение контекстом: добавляет иерархию заголовков в метаданные.
-  5.  Специальная обработка таблиц.
+  Продвинутый чанкер для HTML.
+  - Сохраняет иерархию заголовков (H1 > H2).
+  - Умно парсит таблицы (Колонка: Значение).
   """
-  HEADER_TAGS: List[str] = ["h1", "h2", "h3", "h4", "h5", "h6"]
-  CONTENT_TAGS: List[str] = ["p", "li"]
-  TAGS_TO_REMOVE: List[str] = ["nav", "header", "footer", "script", "style",
-                               "aside"]
 
   def __init__(self, min_chunk_size: int = 50):
     self.min_chunk_size = min_chunk_size
+    self.headers_stack = {}
 
-  def _clean_html(self, soup: BeautifulSoup):
-    """Удаляет из HTML все ненужные секции."""
-    for tag_name in self.TAGS_TO_REMOVE:
-      for tag in soup.find_all(tag_name):
-        tag.decompose()
+  def _clean_element(self, element: Tag):
+    """Удаляет мусорные теги внутри конкретного элемента."""
+    for tag in element.find_all(
+        ['script', 'style', 'nav', 'footer', 'iframe', 'video', 'aside',
+         'form'], recursive=True):
+      tag.decompose()
 
-  def _get_heading_text(self, headings_stack: Dict[str, str]) -> str:
-    """Собирает иерархию заголовков в одну строку, например "Главная / О нас"."""
-    return " / ".join(
-      filter(None, [headings_stack.get(f"h{i}", "") for i in range(1, 7)]))
+  def _get_context_string(self) -> str:
+    levels = sorted(self.headers_stack.keys())
+    return " > ".join([self.headers_stack[l] for l in levels])
 
-  def _process_table(self, tag: Tag, base_metadata: dict, heading_text: str) -> \
-  List[Document]:
-    """Обрабатывает таблицу, создавая чанк для каждой значимой строки."""
-    table_chunks = []
-    # Используем separator=' ', чтобы <br> превращался в пробел, а не исчезал
-    header_cells = [cell.get_text(strip=True, separator=' ') for cell in
-                    tag.find_all('th')]
+  def _process_table(self, table: Tag, source: str) -> List[Document]:
+    chunks = []
+    headers = []
 
-    for row in tag.find_all('tr'):
-      row_cells = [cell.get_text(strip=True, separator=' ') for cell in
-                   row.find_all(['td', 'th'])]
+    # Попытка найти заголовки
+    thead = table.find('thead')
+    if thead:
+      headers = [th.get_text(strip=True) for th in thead.find_all('th')]
 
-      # Пропускаем пустые или "мусорные" строки
-      if not "".join(row_cells).strip():
-        continue
+    rows = table.find_all('tr')
+    if not headers and rows:
+      # Эвристика: первая строка жирная или th?
+      first_row_cells = rows[0].find_all(['td', 'th'])
+      if all(c.name == 'th' for c in first_row_cells) or len(rows) > 1:
+        headers = [c.get_text(strip=True) for c in first_row_cells]
+        rows = rows[1:]
 
-      row_text = " | ".join(filter(None, row_cells))
+    context = self._get_context_string()
 
-      if len(row_text) < self.min_chunk_size:
-        continue
+    for row in rows:
+      cells = row.find_all(['td', 'th'])
+      if not cells: continue
 
-      metadata = base_metadata.copy()
-      metadata['heading_hierarchy'] = heading_text
+      row_data = []
+      for i, cell in enumerate(cells):
+        cell_text = cell.get_text(" ",
+                                  strip=True)  # separator=" " чтобы не слипалось
+        if not cell_text: continue
 
-      # Обогащаем контент, чтобы LLM было проще понять, что это таблица
-      enriched_content = f"Раздел: {heading_text}\nТаблица: {row_text}"
-      table_chunks.append(
-        Document(page_content=enriched_content, metadata=metadata))
+        col_name = headers[i] if i < len(headers) else ""
+        if col_name:
+          row_data.append(f"{col_name}: {cell_text}")
+        else:
+          row_data.append(cell_text)
 
-    return table_chunks
+      if row_data:
+        # Если заголовков нет, просто соединяем через пайп
+        if headers:
+          content = f"Контекст: {context}\nДанные: {'; '.join(row_data)}"
+        else:
+          content = f"Контекст: {context}\nСтрока таблицы: {' | '.join(row_data)}"
+
+        chunks.append(Document(
+            page_content=content,
+            metadata={"source": source, "type": "table_row", "context": context}
+        ))
+    return chunks
 
   def chunk(self, document: Document) -> List[Document]:
-    """Основной метод, который выполняет разделение документа на чанки."""
-    soup = BeautifulSoup(document.page_content, 'lxml')
-    self._clean_html(soup)
+    # Используем html.parser, он иногда прощает ошибки верстки лучше lxml
+    soup = BeautifulSoup(document.page_content, 'html.parser')
 
-    body = soup.find('div', id='block-famcs-content') or soup.find(
-      'article') or soup.find("body")
-    if not body:
-      return []
+    # Стратегия поиска контента (по убыванию специфичности)
+    candidates = [
+      soup.select_one('article'),
+      soup.select_one('div.field--name-body'),
+      soup.select_one('div#block-famcs-content'),
+      soup.select_one('main'),
+      soup.select_one('div.region-content'),
+      soup.body
+    ]
+
+    main_content = None
+    for c in candidates:
+      if c:
+        main_content = c
+        break
+
+    if not main_content:
+      # Если совсем ничего не нашли - берем весь суп
+      main_content = soup
+
+    # Чистим найденный контент от мусора
+    self._clean_element(main_content)
 
     chunks = []
-    # Словарь для хранения текущих заголовков по уровням
-    headings_stack = {tag: "" for tag in self.HEADER_TAGS}
+    self.headers_stack = {}
 
-    # Находим все интересующие нас теги в порядке их следования в документе
-    all_tags = body.find_all(self.HEADER_TAGS + self.CONTENT_TAGS + ["table"])
+    # Ищем H1 заголовки страницы, если они вне content блока (иногда бывает)
+    page_title = soup.find('h1', class_='page-title')
+    if page_title:
+      self.headers_stack[1] = page_title.get_text(strip=True)
 
-    for tag in all_tags:
-      # 1. Если это заголовок - обновляем стек
-      if tag.name in self.HEADER_TAGS:
-        level = int(tag.name[1])
-        headings_stack[tag.name] = tag.get_text(strip=True)
-        # Сбрасываем все заголовки более низкого уровня
-        for i in range(level + 1, 7):
-          headings_stack[f"h{i}"] = ""
+    # Итерируемся
+    for element in main_content.find_all(
+        ['h1', 'h2', 'h3', 'h4', 'p', 'ul', 'ol', 'table', 'div']):
+
+      # Игнорируем пустые элементы
+      if not element.get_text(strip=True):
         continue
 
-      current_heading_text = self._get_heading_text(headings_stack)
+      if element.name in ['h1', 'h2', 'h3', 'h4']:
+        level = int(element.name[1])
+        self.headers_stack[level] = element.get_text(strip=True)
+        self.headers_stack = {k: v for k, v in self.headers_stack.items() if
+                              k <= level}
 
-      # 2. Если это таблица - обрабатываем ее отдельно
-      if tag.name == 'table':
+      elif element.name == 'table':
         chunks.extend(
-          self._process_table(tag, document.metadata, current_heading_text))
-        continue
+          self._process_table(element, document.metadata.get('source', '')))
 
-      # 3. Если это обычный контент (p, li)
-      text = tag.get_text(strip=True)
-      if text and len(text) >= self.min_chunk_size:
-        metadata = document.metadata.copy()
-        metadata['heading_hierarchy'] = current_heading_text
+      elif element.name in ['p', 'div']:
+        # Для div проверяем, что это текстовый блок, а не контейнер
+        if element.name == 'div' and element.find(['p', 'table', 'h2']):
+          continue  # Это контейнер, пропускаем, зайдем внутрь на след итерации
 
-        # Обогащаем контент для лучшего понимания LLM
-        enriched_content = f"Раздел: {current_heading_text}\n\n{text}"
-        chunks.append(
-          Document(page_content=enriched_content, metadata=metadata))
+        text = element.get_text(separator=' ', strip=True)
+        # Фильтр короткого мусора (менюшки, даты)
+        if len(text) > 40:
+          context = self._get_context_string()
+          content = f"Контекст: {context}\nТекст: {text}"
+          chunks.append(Document(
+              page_content=content,
+              metadata={**document.metadata, "context": context}
+          ))
+
+      elif element.name in ['ul', 'ol']:
+        # Списки обрабатываем целиком
+        items = [li.get_text(strip=True) for li in element.find_all('li')]
+        if items:
+          text = "\n".join([f"- {item}" for item in items])
+          if len(text) > 30:
+            context = self._get_context_string()
+            content = f"Контекст: {context}\nСписок:\n{text}"
+            chunks.append(Document(
+                page_content=content,
+                metadata={**document.metadata, "context": context}
+            ))
 
     return chunks
