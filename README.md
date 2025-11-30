@@ -252,6 +252,11 @@ docker-compose exec rag-cli python main.py test --chunker=semantic --force-index
 docker-compose exec rag-cli python main.py test --chunker=markdown --index-mode=full --force-index
 ```
 
+**Сценарий Владислава Шумана: Набор параметров, на котором регулярно тестирует Владислав**
+```bash
+docker-compose exec rag-cli python main.py test --chunker=markdown --retriever=hybrid --index-mode=test --force-index
+```
+
 ### Метрики качества
 В конце прогона выводится отчет:
 *   **Hit Rate (Retrieval):** Эвристическая оценка точности поиска (нашел ли ретривер ключевые слова из ответа).

@@ -14,7 +14,7 @@ from langchain.evaluation import load_evaluator
 # Твои модули
 from src.di_containers import Container
 from src.pipelines.indexing.pipeline import run_indexing
-from src.util.yaml_parser import load_qa_test_set
+from src.util.yaml_parser import TestSetLoader
 
 # --- КОНСТАНТЫ ---
 MAX_CONTEXT_CHARS = 12000
@@ -125,7 +125,8 @@ async def run_full_test_pipeline(args, container, config_data):
 
   # 3. Тестирование
   print(f"\n🧪 ЗАПУСК ТЕСТИРОВАНИЯ (Retriever: {args.retriever})...")
-  qa_set = load_qa_test_set(config_data['paths']['qa_test_set'])
+  loader = TestSetLoader(config_data['paths']['qa_test_set'])
+  qa_set = loader.get_qa_pairs()
   if not qa_set: sys.exit("QA set empty")
 
   retrieval_chain = container.retrieval_chain()

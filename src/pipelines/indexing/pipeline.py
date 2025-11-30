@@ -11,6 +11,7 @@ from rank_bm25 import BM25Okapi
 
 from src.interfaces.data_processor_interfaces import DataSourceProcessor
 from src.pipelines.indexing.crawlers.website_crawler import WebsiteCrawler
+from src.util.yaml_parser import TestSetLoader
 
 
 # --- БЛОК УТИЛИТАРНЫХ ФУНКЦИЙ ---
@@ -89,10 +90,12 @@ def run_indexing(config: dict, processor: DataSourceProcessor, mode: str):
 
   # --- ЛОГИКА ВЫБОРА URL В ЗАВИСИМОСТИ ОТ РЕЖИМА ---
   if mode == 'test':
-    print("--- Режим 'test': используются URL из `test_urls` в config.yaml ---")
-    urls_to_process = config['data_source'].get('test_urls', [])
+    print("--- Режим 'test': загрузка URL из qa-test-set.yaml ---")
+    loader = TestSetLoader(config['paths']['qa_test_set'])
+    urls_to_process = loader.get_test_urls()
+
     if not urls_to_process:
-      print("❌ Ошибка: Список 'test_urls' в config.yaml пуст.")
+      print("❌ Ошибка: В qa-test-set.yaml нет активных URL для индексации.")
       return
   elif mode == 'full':
     print("--- Режим 'full': запуск полного обхода сайта ---")
