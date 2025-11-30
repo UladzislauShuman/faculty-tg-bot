@@ -12,9 +12,10 @@ data_source:
     - "https://fpmi.bsu.by/master-degree"
     - "https://fpmi.bsu.by/olympiads"
 
+    - "https://fpmi.bsu.by/graduate"
     - "https://fpmi.bsu.by/departments"
-    - "https://fpmi.bsu.by/famcs_in_the_media"
-
+    - "https://fpmi.bsu.by/science"
+    - "https://fpmi.bsu.by/employee"
 # 2. Настройки Embedding-модели (Основная, для поиска и хранения векторов)
 embedding_model:
   # Используем e5-small вместо large для скорости на CPU (Mac M4)
