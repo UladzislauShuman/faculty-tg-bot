@@ -14,7 +14,7 @@ class HybridRetrieverFactory:
   """
   Класс-фабрика, который инкапсулирует логику создания двух разных
   типов ретриверов (векторного и по ключевым словам) и их объединения
-  в гибридный ансамбль.
+  в гибрид.
   """
 
   def __init__(self, config: Dict[str, Any]):
@@ -51,7 +51,7 @@ class HybridRetrieverFactory:
     )
 
   def _create_bm25_retriever(self) -> BaseRetriever:
-    """Создает ретривер для поиска по ключевым словам (BM25)."""
+    """Загрузка BM25 индекса из файла."""
     print("Инициализация BM25 ретривера...")
     bm25_index_path = self.config['retrievers']['bm25']['index_path']
     if not os.path.exists(bm25_index_path):
@@ -67,14 +67,19 @@ class HybridRetrieverFactory:
 
   def create(self) -> BaseRetriever:
     """
-    Основной метод, который создает и объединяет ретриверы в гибридный ансамбль.
+    Основной метод, который создает и объединяет ретриверы
     """
     chroma_retriever = self._create_vector_retriever()
     bm25_retriever = self._create_bm25_retriever()
 
+    # Получаем веса из конфига с дефолтными значениями
+    weights_config = self.config['retrievers'].get('hybrid_weights', {})
+    vector_weight = weights_config.get('vector', 0.7)
+    keyword_weight = weights_config.get('keyword', 0.3)
+
     ensemble_retriever = EnsembleRetriever(
         retrievers=[chroma_retriever, bm25_retriever],
-        weights=[0.7, 0.3]  # Отдаем предпочтение семантическому поиску
+        weights=[vector_weight, vector_weight]
     )
 
     print("✅ Гибридный ретривер (Ensemble) успешно создан.")

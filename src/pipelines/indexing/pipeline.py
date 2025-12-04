@@ -14,10 +14,6 @@ from src.pipelines.indexing.crawlers.website_crawler import WebsiteCrawler
 from src.util.yaml_parser import TestSetLoader
 
 
-# --- БЛОК УТИЛИТАРНЫХ ФУНКЦИЙ ---
-# Эти функции являются "помощниками". Они выполняют конкретные,
-# атомарные задачи и не зависят от бизнес-логики.
-
 def _save_chunks_to_file(chunks: List[Document], config: Dict[str, Any]):
   """Сохраняет отформатированный список чанков в текстовый файл для отладки."""
   output_dir = config['paths']['output_dir']
@@ -38,7 +34,7 @@ def _save_chunks_to_file(chunks: List[Document], config: Dict[str, Any]):
 
 
 def _create_bm25_index(chunks: List[Document], config: Dict[str, Any]):
-  """Создает и сохраняет на диск индекс BM25 для поиска по ключевым словам."""
+  """Создает BM25 индекс."""
   print("Создание BM25 индекса...")
   tokenized_corpus = [doc.page_content.split() for doc in chunks]
   bm25 = BM25Okapi(tokenized_corpus)
@@ -50,7 +46,7 @@ def _create_bm25_index(chunks: List[Document], config: Dict[str, Any]):
 
 
 def _create_vector_store(chunks: List[Document], config: Dict[str, Any]):
-  """Создает и сохраняет на диск векторную базу данных (ChromaDB)."""
+  """Создает ChromaDB индекс."""
   print("Создание векторной базы данных...")
   db_dir = config['retrievers']['vector_store']['db_path']
   model_name = config['embedding_model']['name']
@@ -61,7 +57,7 @@ def _create_vector_store(chunks: List[Document], config: Dict[str, Any]):
       encode_kwargs={'normalize_embeddings': True}
   )
 
-  # Специальная обработка для моделей e5, которые требуют префикс "passage:"
+  # обработка для моделей e5, которые требуют префикс "passage:"
   if "e5" in model_name:
     chunks_to_embed = [
       Document(page_content=f"passage: {chunk.page_content}",
@@ -76,19 +72,10 @@ def _create_vector_store(chunks: List[Document], config: Dict[str, Any]):
   print(f"✅ Векторная база данных сохранена в {db_dir}")
 
 
-# --- ГЛАВНАЯ ФУНКЦИЯ-ОРКЕСТРАТОР ---
 def run_indexing(config: dict, processor: DataSourceProcessor, mode: str):
-  """
-  Главная функция-оркестратор пайплайна индексации.
-
-  Args:
-      config (dict): Словарь с конфигурацией из config.yaml.
-      processor (DataSourceProcessor): Объект для обработки данных.
-      mode (str): Режим работы - 'full' или 'test'.
-  """
+  """Запуск процесса индексации."""
   urls_to_process = []
 
-  # --- ЛОГИКА ВЫБОРА URL В ЗАВИСИМОСТИ ОТ РЕЖИМА ---
   if mode == 'test':
     print("--- Режим 'test': загрузка URL из qa-test-set.yaml ---")
     loader = TestSetLoader(config['paths']['qa_test_set'])

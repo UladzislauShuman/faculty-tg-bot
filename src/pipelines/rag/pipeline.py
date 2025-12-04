@@ -14,12 +14,12 @@ from langchain.retrievers.contextual_compression import \
   ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain_openai import ChatOpenAI
 
 from src.retrievers.hybrid_retriever_factory import create_hybrid_retriever
 
 load_dotenv()
 
-# --- ШАБЛОНЫ ---
 PROMPT_TEMPLATE = """
 Ты — официальный ассистент ФПМИ БГУ. Отвечай ТОЛЬКО на основе контекста ниже.
 
@@ -35,9 +35,6 @@ PROMPT_TEMPLATE = """
 ОТВЕТ:
 """
 
-
-# --- ФУНКЦИИ ---
-
 def get_llm_from_config(provider_config: dict):
   provider_type = provider_config.get("type")
   if provider_type == "ollama":
@@ -46,7 +43,15 @@ def get_llm_from_config(provider_config: dict):
         base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434")
     )
   elif provider_type == "yandex_gpt":
-    return YandexGPT(api_key=provider_config.get("secret"))
+    secret_key = os.getenv("YANDEX_GPT_SECRET")
+    if not secret_key:
+      secret_key = provider_config.get("secret")
+    if not secret_key or secret_key == "YOUR_YANDEX_SECRET_KEY_HERE":
+      raise ValueError(
+          "❌ Ошибка: Не найден API-ключ YandexGPT. "
+          "Добавьте YANDEX_GPT_SECRET в файл .env"
+      )
+    return YandexGPT(api_key=secret_key)
   else:
     raise ValueError(f"Unknown provider: {provider_type}")
 
@@ -54,6 +59,7 @@ def get_llm_from_config(provider_config: dict):
 def create_final_retriever(config: dict) -> BaseRetriever:
   hybrid_retriever = create_hybrid_retriever(config)
 
+  # Reranker
   reranker_conf = config['retrievers']['reranker']
   cross_encoder = HuggingFaceCrossEncoder(model_name=reranker_conf['model'])
   compressor = CrossEncoderReranker(model=cross_encoder,
@@ -64,16 +70,16 @@ def create_final_retriever(config: dict) -> BaseRetriever:
   )
 
 
-# --- ЦЕПОЧКИ (CHAINS) ---
+# --- ЦЕПОЧКИ ---
 
 def create_retrieval_chain(config: dict, retriever: BaseRetriever) -> Runnable:
-  """Цепочка 1: Только поиск документов."""
+  """Только поиск документов."""
   return RunnableLambda(lambda q: retriever.invoke(q))
 
 
 def create_generation_chain(config: dict) -> Runnable:
   """
-  Цепочка 2: Только генерация.
+  Только генерация.
   Принимает dict: {"context": str, "question": str}
   """
   provider_name = os.getenv("LLM_PROVIDER", "ollama")
@@ -85,10 +91,7 @@ def create_generation_chain(config: dict) -> Runnable:
 
 
 def create_rag_chain(config: dict, retriever: BaseRetriever):
-  """
-  Цепочка 3 (All-in-One): Поиск + Генерация.
-  Используется Телеграм-ботом.
-  """
+  """Полный RAG (для бота)."""
   gen_chain = create_generation_chain(config)
 
   rag_chain = (

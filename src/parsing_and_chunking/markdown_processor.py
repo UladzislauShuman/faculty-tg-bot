@@ -10,17 +10,11 @@ from src.interfaces.data_processor_interfaces import DataSourceProcessor
 
 class MarkdownProcessor(DataSourceProcessor):
   """
-  Реализация обработчика, которая использует надежный 4-шаговый пайплайн
-  с предварительной конвертацией контента в Markdown.
-
-  Эта стратегия дает максимальный контроль и использует легкие зависимости.
+  Простая стратегия: HTML -> Markdown -> Split by Headers (#, ##).
+  Хорошо работает для простых статей, плохо для таблиц.
   """
 
   def process(self, source: str) -> List[Document]:
-    """
-    Загружает HTML, извлекает метаданные, конвертирует основной контент
-    в Markdown, а затем разбивает его на чанки по заголовкам.
-    """
     print(f"⚙️ Обработка {source} с помощью MarkdownProcessor...")
     try:
       response = requests.get(source, headers={"User-Agent": "Mozilla/5.0"},
@@ -41,6 +35,7 @@ class MarkdownProcessor(DataSourceProcessor):
           f"  - ⚠️ Предупреждение: Не найден основной блок контента на {source}.")
         return []
 
+      # Чистим
       for tag in content_block.find_all(
           ['script', 'form', 'nav', 'header', 'footer']):
         tag.decompose()
