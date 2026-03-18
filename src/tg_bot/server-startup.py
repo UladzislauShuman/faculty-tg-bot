@@ -51,6 +51,7 @@ def main():
     dp["user_service"] = container.bot_user_service()
     dp["answer_service"] = container.bot_answer_service()
     dp["rag_chain"] = container.rag_chain()
+    dp["session_service"] = container.bot_session_service()
     logger.info("RAG-компоненты готовы.")
 
     dp.include_router(main_router)

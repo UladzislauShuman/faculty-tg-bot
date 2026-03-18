@@ -11,11 +11,12 @@ class Answer(Base):
     __tablename__ = "rag_bot_answers"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("rag_bot_users.id"))
+    session_id: Mapped[str] = mapped_column(String, ForeignKey("rag_bot_sessions.id"))
+
     question: Mapped[str] = mapped_column(Text, nullable=False)
     bot_answer: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(
         TIMESTAMP, default=datetime.datetime.utcnow
     )
 
-    user: Mapped["User"] = relationship(back_populates="answers")
+    session: Mapped["UserSession"] = relationship(back_populates="answers")
