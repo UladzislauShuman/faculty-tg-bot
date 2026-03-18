@@ -18,6 +18,10 @@ services:
       - DB__PASS=${DB__PASS}
       - LLM_PROVIDER=ollama
       - YANDEX_GPT_SECRET=${YANDEX_GPT_SECRET}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
     volumes:
       - ./src:/app/src
       - ./config:/app/config
@@ -46,6 +50,10 @@ services:
       - TGSERVER__TOKEN=${TGSERVER__TOKEN}
       - TGSERVER__WEBHOOK_URL=${TGSERVER__WEBHOOK_URL}
       - YANDEX_GPT_SECRET=${YANDEX_GPT_SECRET}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
     volumes:
       - ./src:/app/src
       - ./config:/app/config

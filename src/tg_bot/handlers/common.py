@@ -3,6 +3,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 from langchain_core.runnables import Runnable
 
+from src.util.callbacks import ProfilingCallbackHandler
 from src.tg_bot.services.interfaces import IUserService, IAnswerService
 
 common_router = Router()
@@ -40,11 +41,21 @@ async def question_handler(
     # Получаем ответ от RAG-цепочки (она уже инициализирована с конфигом)
     # invoke блокирующий, но aiogram запускает хендлеры в тредах, так что для MVP ок.
     # В идеале rag_chain.ainvoke, если поддерживается.
+    profiler = ProfilingCallbackHandler()
+    config_with_callbacks = {"callbacks": [profiler]}
+
+    # Получаем ответ от RAG-цепочки с подключенным логированием
     try:
-        bot_answer = await rag_chain.ainvoke(message.text)
+      bot_answer = await rag_chain.ainvoke(
+          message.text,
+          config=config_with_callbacks
+      )
     except AttributeError:
-        # Если цепочка не поддерживает асинхронность нативно
-        bot_answer = rag_chain.invoke(message.text)
+      # Если цепочка не поддерживает асинхронность нативно
+      bot_answer = rag_chain.invoke(
+          message.text,
+          config=config_with_callbacks
+      )
 
     # Отправляем ответ пользователю
     await message.answer(bot_answer)

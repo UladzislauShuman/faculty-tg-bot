@@ -51,7 +51,7 @@ docker-compose restart bot
 echo -e "\n${YELLOW}7/7. Настройка завершена!${NC}"
 echo -e "${GREEN}Бот запущен и готов к работе.${NC}"
 echo "------------------------------------------------------------------"
-echo "ВАЖНО: Для работы с Telegram нужен HTTPS туннель (По умолчанию используется localtunnel и запуститься именно он)"
+echo "ВАЖНО: Для работы с Telegram нужен HTTPS туннель (По умолчанию используется localtunnel и запуститься далее именно он)"
 echo "1. Убедитесь, что у вас установлен Node.js."
 echo "2. Откройте НОВОЕ окно терминала и запустите:"
 echo -e "${YELLOW}   npx localtunnel --port 8080 --subdomain famcsanswerbot${NC}"
@@ -60,4 +60,6 @@ echo "   в переменную TGSERVER__WEBHOOK_URL (не забудьте д
 echo "Чтобы перезапустить бота: docker-compose restart bot"
 echo "Чтобы остановить бота: docker-compose down"
 echo "------------------------------------------------------------------"
+
+echo -e "\n${YELLOW}Выполняю команду npx localtunnel --port 8080 --subdomain famcsanswerbot${NC}"
 npx localtunnel --port 8080 --subdomain famcsanswerbot

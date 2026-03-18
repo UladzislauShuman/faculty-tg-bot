@@ -14,7 +14,6 @@ from langchain.retrievers.contextual_compression import \
   ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
-from langchain_openai import ChatOpenAI
 
 from src.retrievers.hybrid_retriever_factory import create_hybrid_retriever
 
