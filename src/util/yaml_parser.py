@@ -47,3 +47,22 @@ class TestSetLoader:
     logger.info(
       f"✅ Загружено {len(qa_list)} тестовых вопросов из {self.file_path}")
     return qa_list
+
+  def get_test_scenarios(self) -> list[dict]:
+    """Возвращает список многошаговых сценариев (диалогов)"""
+    scenarios = []
+    for item in self._data:
+      if not item.get('enabled', True):
+        continue
+
+      if 'scenarios' in item:
+        for scenario in item['scenarios']:
+          scenarios.append({
+            "url": item.get('url'),
+            "name": scenario['name'],
+            "steps": scenario['steps']
+          })
+
+    logger.info(
+      f"✅ Загружено {len(scenarios)} тестовых сценариев из {self.file_path}")
+    return scenarios

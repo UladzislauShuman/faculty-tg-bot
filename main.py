@@ -32,7 +32,7 @@ def manage_db_state_for_test(config_data: dict, force_reindex: bool):
     return True
 
   if not exists:
-    print(f"⚠️  [TEST] Индексы не найдены. Требуется создание.")
+    print(f"⚠️[TEST] Индексы не найдены. Требуется создание.")
     return True
 
   print(f"✅  [TEST] Найдены существующие индексы: {db_path}")
@@ -48,6 +48,9 @@ def main():
 
   # TEST
   test_parser = subparsers.add_parser("test")
+  test_parser.add_argument("eval_mode", nargs="?",
+                           choices=["all", "questions", "scenarios"],
+                           help="Режим тестирования")
   test_parser.add_argument("--chunker", type=str, default="markdown",
                            choices=["markdown", "semantic", "unstructured"])
   test_parser.add_argument("--retriever", type=str, default="hybrid")
@@ -62,16 +65,30 @@ def main():
   idx_parser.add_argument("--chunker", type=str, default="markdown",
                           choices=["markdown", "semantic", "unstructured"])
 
+  # RETRIEVE
   subparsers.add_parser("retrieve").add_argument("-q", "--query")
-  subparsers.add_parser("answer").add_argument("-q", "--query")
+
+  # ANSWER
+  ans_parser = subparsers.add_parser("answer")
+  ans_parser.add_argument("eval_mode", nargs="?",
+                          choices=["all", "questions", "scenarios"],
+                          help="Режим тестирования")
+  ans_parser.add_argument("-q", "--query")
 
   args = parser.parse_args()
 
   try:
-    with open('config/config.yaml', 'r') as f:
+    with open('config/config.yaml', 'r', encoding='utf-8') as f:
       config = yaml.safe_load(f)
-  except:
-    sys.exit("Config missing")
+  except Exception as e:
+    sys.exit(f"Config missing or invalid: {e}")
+
+  # --- Переопределение режима из CLI ---
+  if hasattr(args, 'eval_mode') and args.eval_mode:
+    if 'evaluation_settings' not in config:
+      config['evaluation_settings'] = {}
+    config['evaluation_settings']['mode'] = args.eval_mode
+    print(f"🔧 Режим тестирования переопределен через CLI: {args.eval_mode}")
 
   # Настройка путей для ТЕСТА
   if args.command == "test":
@@ -121,13 +138,23 @@ def main():
       docs = retrieval_step.invoke(args.query)
       for d in docs:
         print(
-          f"\n--- {d.metadata.get('title', 'Doc')} ---\n{d.page_content[:200]}...")
+            f"\n--- {d.metadata.get('title', 'Doc')} ---\n{d.page_content[:200]}...")
+
 
   elif args.command == "answer":
     rag_chain = container.rag_chain()
     if args.query:
+      # Одиночный вопрос из консоли
       print(f"Вопрос: {args.query}")
-      print(rag_chain.invoke(args.query))
+      response = asyncio.run(rag_chain.ainvoke(
+          {"input": args.query},
+          config={"configurable": {"session_id": "cli_test_session"}}
+      ))
+      print(response["answer"])
+    else:
+      # Пакетное тестирование
+      from src.evaluation.evaluate import run_evaluation_pipeline
+      asyncio.run(run_evaluation_pipeline(rag_chain, config))
 
 
 if __name__ == "__main__":

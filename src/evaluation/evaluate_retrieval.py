@@ -2,7 +2,7 @@ import os
 from typing import List, Dict, Any
 from langchain_core.runnables import Runnable
 from langchain_core.documents import Document
-from src.util.yaml_parser import load_qa_test_set
+from src.util.yaml_parser import TestSetLoader
 
 
 def _format_retrieval_result(index: int, question: str,
@@ -67,7 +67,9 @@ def run_retrieval_evaluation(retriever_chain: Runnable, config: Dict[str, Any]):
 
   os.makedirs(output_dir, exist_ok=True)
 
-  test_set = load_qa_test_set(qa_file_path)
+  loader = TestSetLoader(qa_file_path)
+  test_set = loader.get_qa_pairs()
+
   if not test_set:
     print(f"Не удалось загрузить тестовый набор из {qa_file_path}")
     return

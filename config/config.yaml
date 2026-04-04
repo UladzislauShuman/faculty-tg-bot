@@ -50,7 +50,11 @@ providers:
     type: yandex_gpt
     model: "yandexgpt-lite"
 
-# 6. Пути к файлам
+# 6. Настройки тестирования (Evaluation)
+evaluation_settings:
+  mode: "all" # Варианты: all (всё), questions (только одиночные), scenarios (только диалоги)
+
+# 7. Пути к файлам
 paths:
   output_dir: "output"
   qa_test_set: "qa-test-set.yaml"

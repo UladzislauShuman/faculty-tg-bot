@@ -1,5 +1,7 @@
 import os
 import time
+import uuid
+import sys
 import asyncio
 from datetime import datetime
 from typing import List, Dict
@@ -22,6 +24,8 @@ class TestPipelineRunner:
     self.container = container
     self.config = config
     self.output_dir = config['paths']['output_dir']
+    self.answer_service = container.bot_answer_service()
+    self.rag_chain = container.rag_chain()
 
   def _simple_ru_stem(self, word: str) -> str:
     """Примитивный стемминг."""
@@ -98,18 +102,17 @@ class TestPipelineRunner:
 
     # 2. Индексация
     if args.need_index:
-      # Ленивый импорт, чтобы избежать циклических зависимостей, если они есть
       from src.pipelines.indexing.pipeline import run_indexing
       print(f"\n🏗️  Запуск индексации ({args.chunker})...")
       processor = self.container.data_processor()
       run_indexing(self.config, processor, mode=args.index_mode)
 
     # 3. Подготовка
-    print(f"\n🧪 ЗАПУСК ТЕСТИРОВАНИЯ...")
-    loader = TestSetLoader(self.config['paths']['qa_test_set'])
-    qa_set = loader.get_qa_pairs()
-    if not qa_set: sys.exit("QA set empty")
+    # Читаем режим тестирования из конфига (по умолчанию 'all')
+    test_mode = self.config.get('evaluation_settings', {}).get('mode', 'all')
+    print(f"\n🧪 ЗАПУСК ТЕСТИРОВАНИЯ (Режим: {test_mode})...")
 
+    loader = TestSetLoader(self.config['paths']['qa_test_set'])
     retrieval_chain = self.container.retrieval_chain()
     generation_chain = self.container.generation_chain()
 
@@ -127,65 +130,128 @@ class TestPipelineRunner:
                               f"trace_{args.chunker}_{datetime.now().strftime('%H%M')}.md")
     print(f"📝 Лог: {trace_path}")
 
-    # Шаг 1: Batch Retrieval
-    print(f"🔎 [1/2] Поиск документов ({len(qa_set)} шт)...")
-    retrieval_tasks = [retrieval_chain.ainvoke(qa['question']) for qa in qa_set]
-    retrieved_docs_batch = await asyncio.gather(*retrieval_tasks)
-
-    # Шаг 2: Generation
-    print(f"🤖 [2/2] Генерация и оценка...")
     results = []
     total_hit_rate = 0
 
     with open(trace_path, "w", encoding="utf-8") as trace_file:
-      trace_file.write(f"# Trace Log\nConfig: {args.chunker}\n\n")
+      trace_file.write(
+        f"# Trace Log\nConfig: {args.chunker}\nTest Mode: {test_mode}\n\n")
 
-      for i, (qa, docs) in enumerate(zip(qa_set, retrieved_docs_batch)):
-        hit = self._calculate_hit_rate(qa['answer'], docs)
-        total_hit_rate += hit
+      # =================================================================
+      # БЛОК 1: ОДИНОЧНЫЕ ВОПРОСЫ
+      # =================================================================
+      if test_mode in ['all', 'questions']:
+        qa_set = loader.get_qa_pairs()
+        if qa_set:
+          print(f"\n🔎 [БЛОК 1] Одиночные вопросы ({len(qa_set)} шт)...")
+          retrieval_tasks = [retrieval_chain.ainvoke(qa['question']) for qa in
+                             qa_set]
+          retrieved_docs_batch = await asyncio.gather(*retrieval_tasks)
 
-        print(f"[{i + 1}/{len(qa_set)}] {qa['question'][:50]}...")
+          for i, (qa, docs) in enumerate(zip(qa_set, retrieved_docs_batch)):
+            hit = self._calculate_hit_rate(qa['answer'], docs)
+            total_hit_rate += hit
 
-        # Обрезка контекста
-        safe_docs = []
-        current_chars = 0
-        for d in docs:
-          doc_len = len(d.page_content)
-          if current_chars + doc_len < self.MAX_CONTEXT_CHARS:
-            safe_docs.append(d)
-            current_chars += doc_len
-          else:
-            break
+            print(f"[{i + 1}/{len(qa_set)}] {qa['question'][:50]}...")
 
-        full_context = "\n\n".join(
-            [f"Источник: {d.metadata.get('source')}\n{d.page_content}" for d in
-             safe_docs])
+            # Обрезка контекста
+            safe_docs = []
+            current_chars = 0
+            for d in docs:
+              doc_len = len(d.page_content)
+              if current_chars + doc_len < self.MAX_CONTEXT_CHARS:
+                safe_docs.append(d)
+                current_chars += doc_len
+              else:
+                break
 
-        start_time = time.time()
-        try:
-          response = await generation_chain.ainvoke(
-              {"context": full_context, "question": qa['question']})
-          latency = time.time() - start_time
+            full_context = "\n\n".join(
+                [f"Источник: {d.metadata.get('source')}\n{d.page_content}" for d
+                 in safe_docs])
 
-          dist = evaluator.evaluate_strings(prediction=response,
-                                            reference=qa['answer'])['score']
-          score = 1.0 - dist
+            start_time = time.time()
+            try:
+              response = await generation_chain.ainvoke(
+                  {"context": full_context, "question": qa['question']})
+              latency = time.time() - start_time
 
-          self._append_to_trace(trace_file, i + 1, qa, safe_docs, response,
-                                score, latency, hit)
+              dist = evaluator.evaluate_strings(prediction=response,
+                                                reference=qa['answer'])['score']
+              score = 1.0 - dist
 
-          icon = "✅" if hit else "❌"
-          print(f"   -> {icon} Hit | Sim: {score:.2f} | {latency:.1f}s")
+              self._append_to_trace(trace_file, i + 1, qa, safe_docs, response,
+                                    score, latency, hit)
 
-          results.append({
-            "q": qa['question'], "a": response, "ref": qa['answer'],
-            "score": score, "latency": latency, "hit": hit
-          })
-        except Exception as e:
-          print(f"   -> ❌ Error: {e}")
-          trace_file.write(f"## Error: {e}\n")
+              icon = "✅" if hit else "❌"
+              print(f"   -> {icon} Hit | Sim: {score:.2f} | {latency:.1f}s")
 
-    # Итоги
+              results.append({
+                "q": qa['question'], "a": response, "ref": qa['answer'],
+                "score": score, "latency": latency, "hit": hit
+              })
+            except Exception as e:
+              print(f"   -> ❌ Error: {e}")
+              trace_file.write(f"## Error: {e}\n")
+
+      # =================================================================
+      # БЛОК 2: МНОГОШАГОВЫЕ СЦЕНАРИИ (ДИАЛОГИ)
+      # =================================================================
+      if test_mode in ['all', 'scenarios']:
+        scenarios = loader.get_test_scenarios()
+        if scenarios:
+          print(f"\n🎬[БЛОК 2] Многошаговые сценарии ({len(scenarios)} шт)...")
+          for sc in scenarios:
+            # Генерируем уникальную сессию для каждого диалога
+            session_id = f"test_{uuid.uuid4().hex[:8]}"
+            trace_file.write(
+              f"## 🎬 Сценарий: {sc['name']} (Session: {session_id})\n\n")
+            print(f"\n--- Сценарий: {sc['name']} ---")
+
+            for step_idx, step in enumerate(sc['steps'], 1):
+              print(f"  Шаг {step_idx}: {step['q'][:50]}...")
+              start_time = time.time()
+              try:
+                # 1. Вызываем умную RAG-цепочку
+                response = await self.rag_chain.ainvoke(
+                    {"input": step['q']},
+                    config={"configurable": {"session_id": session_id}}
+                )
+                latency = time.time() - start_time
+                bot_answer = response['answer']
+                docs = response.get('context', [])
+
+                # 2. Сохраняем в БД для контекста следующего шага
+                await self.answer_service.save_answer(session_id, step['q'],
+                                                      bot_answer)
+
+                # 3. Считаем метрики
+                hit = self._calculate_hit_rate(step['a'], docs)
+                total_hit_rate += hit
+                dist = evaluator.evaluate_strings(prediction=bot_answer,
+                                                  reference=step['a'])['score']
+                score = 1.0 - dist
+
+                # 4. Логируем
+                step_qa = {"question": step['q'], "answer": step['a']}
+                self._append_to_trace(trace_file,
+                                      f"[{sc['name']}] Шаг {step_idx}", step_qa,
+                                      docs, bot_answer, score, latency, hit)
+
+                icon = "✅" if hit else "❌"
+                print(f"     -> {icon} Hit | Sim: {score:.2f} | {latency:.1f}s")
+
+                results.append({
+                  "q": f"[{sc['name']}] {step['q']}", "a": bot_answer,
+                  "ref": step['a'],
+                  "score": score, "latency": latency, "hit": hit
+                })
+              except Exception as e:
+                print(f"     -> ❌ Error: {e}")
+                trace_file.write(f"## Error on step {step_idx}: {e}\n")
+
+    # =================================================================
+    # ИТОГИ
+    # =================================================================
     if results:
       avg_metrics = {
         "sim": sum(r['score'] for r in results) / len(results),
@@ -193,8 +259,11 @@ class TestPipelineRunner:
         "hit": total_hit_rate / len(results)
       }
       print("\n" + "=" * 60)
-      print(f"📊 ИТОГИ ({args.chunker})")
+      print(f"📊 ИТОГИ ({args.chunker} | Режим: {test_mode})")
       print(f"✅ Hit Rate: {avg_metrics['hit']:.2%}")
       print(f"✅ Similarity: {avg_metrics['sim']:.4f}")
       print(f"⏱️  Avg Latency: {avg_metrics['lat']:.2f}s")
       self._save_final_report(results, args, avg_metrics)
+    else:
+      print(
+        "\n⚠️ Нет результатов для отображения (проверьте qa-test-set.yaml и режим тестирования).")
