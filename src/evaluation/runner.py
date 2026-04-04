@@ -24,8 +24,9 @@ class TestPipelineRunner:
     self.container = container
     self.config = config
     self.output_dir = config['paths']['output_dir']
+    self.user_service = container.bot_user_service()
+    self.session_service = container.bot_session_service()
     self.answer_service = container.bot_answer_service()
-    self.rag_chain = container.rag_chain()
 
   def _simple_ru_stem(self, word: str) -> str:
     """Примитивный стемминг."""
@@ -64,7 +65,7 @@ class TestPipelineRunner:
     file_handle.write(f"### 📏 Оценка\n")
     file_handle.write(f"- **Эталон:** {qa['answer']}\n")
     file_handle.write(
-      f"- **Метрики:** {icon} | Sim: **{score:.4f}** | Time: {latency:.2f}s\n")
+        f"- **Метрики:** {icon} | Sim: **{score:.4f}** | Time: {latency:.2f}s\n")
     file_handle.write("\n---\n\n")
     file_handle.flush()
 
@@ -77,7 +78,7 @@ class TestPipelineRunner:
       f.write(f"# 📊 Отчет о тестировании RAG\n")
       f.write(f"**Дата:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
       f.write(
-        f"**Конфигурация:** Chunker=`{args.chunker}`, Mode=`{args.index_mode}`, Retriever=`{args.retriever}`\n\n")
+          f"**Конфигурация:** Chunker=`{args.chunker}`, Mode=`{args.index_mode}`, Retriever=`{args.retriever}`\n\n")
       f.write("## 📈 Сводные метрики\n")
       f.write(f"- **Hit Rate:** {avg_metrics['hit']:.2%}\n")
       f.write(f"- **Similarity:** {avg_metrics['sim']:.4f}\n")
@@ -87,12 +88,12 @@ class TestPipelineRunner:
       for i, res in enumerate(results, 1):
         icon = "✅" if res['hit'] else "❌"
         f.write(
-          f"### {i}. {res['q']}\n- **Эталон:** {res['ref']}\n- **Ответ:** {res['a']}\n- **Метрики:** {icon} Hit={res['hit']} | Sim={res['score']:.4f}\n\n")
+            f"### {i}. {res['q']}\n- **Эталон:** {res['ref']}\n- **Ответ:** {res['a']}\n- **Метрики:** {icon} Hit={res['hit']} | Sim={res['score']:.4f}\n\n")
 
     print(f"\n📄 Отчет сохранен: {report_path}")
 
   async def run(self, args):
-    # 1. Настройка Чанкера (Dynamic DI)
+    # 1. Настройка Чанкера
     processor_name = f"{args.chunker}_processor"
     try:
       processor_provider = getattr(self.container, processor_name)
@@ -108,13 +109,23 @@ class TestPipelineRunner:
       run_indexing(self.config, processor, mode=args.index_mode)
 
     # 3. Подготовка
-    # Читаем режим тестирования из конфига (по умолчанию 'all')
     test_mode = self.config.get('evaluation_settings', {}).get('mode', 'all')
     print(f"\n🧪 ЗАПУСК ТЕСТИРОВАНИЯ (Режим: {test_mode})...")
 
     loader = TestSetLoader(self.config['paths']['qa_test_set'])
+
+    # Инициализируем цепочки
     retrieval_chain = self.container.retrieval_chain()
     generation_chain = self.container.generation_chain()
+    rag_chain = self.container.rag_chain()
+
+    # Подготовка тестового пользователя (ID=0) для соблюдения FK в БД
+    TEST_USER_ID = 0
+    await self.user_service.get_or_create_user(
+        user_id=TEST_USER_ID,
+        first_name="TestRunner",
+        username="test_bot"
+    )
 
     # Оценщик
     eval_emb = HuggingFaceEmbeddings(
@@ -199,10 +210,12 @@ class TestPipelineRunner:
       if test_mode in ['all', 'scenarios']:
         scenarios = loader.get_test_scenarios()
         if scenarios:
-          print(f"\n🎬[БЛОК 2] Многошаговые сценарии ({len(scenarios)} шт)...")
+          print(f"\n🎬 [БЛОК 2] Многошаговые сценарии ({len(scenarios)} шт)...")
           for sc in scenarios:
-            # Генерируем уникальную сессию для каждого диалога
-            session_id = f"test_{uuid.uuid4().hex[:8]}"
+            # Создаем реальную сессию в БД для этого сценария
+            session_id = await self.session_service.start_new_session(
+              user_id=TEST_USER_ID)
+
             trace_file.write(
               f"## 🎬 Сценарий: {sc['name']} (Session: {session_id})\n\n")
             print(f"\n--- Сценарий: {sc['name']} ---")
@@ -212,7 +225,7 @@ class TestPipelineRunner:
               start_time = time.time()
               try:
                 # 1. Вызываем умную RAG-цепочку
-                response = await self.rag_chain.ainvoke(
+                response = await rag_chain.ainvoke(
                     {"input": step['q']},
                     config={"configurable": {"session_id": session_id}}
                 )
@@ -220,7 +233,7 @@ class TestPipelineRunner:
                 bot_answer = response['answer']
                 docs = response.get('context', [])
 
-                # 2. Сохраняем в БД для контекста следующего шага
+                # 2. Сохраняем в БД (теперь ID сессии валидный)
                 await self.answer_service.save_answer(session_id, step['q'],
                                                       bot_answer)
 
