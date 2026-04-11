@@ -13,4 +13,4 @@ class User(Base):
     first_name: Mapped[str] = mapped_column(String, nullable=False)
     username: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    answers: Mapped[list["Answer"]] = relationship(back_populates="user")
+    sessions: Mapped[list["UserSession"]] = relationship(back_populates="user")

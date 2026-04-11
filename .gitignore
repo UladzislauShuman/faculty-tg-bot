@@ -11,3 +11,4 @@ chroma_db/
 hf_cache/
 ollama_data/
 .idea/
+/todo.md

@@ -1,8 +1,34 @@
 from typing import List
+from sqlalchemy import update, desc
 from sqlalchemy.future import select
 from src.tg_bot.db import asession
-from src.tg_bot.models import User, Answer
-from .interfaces import IUserRepository, IAnswerRepository
+from src.tg_bot.models import User, Answer, UserSession
+from .interfaces import IUserRepository, IAnswerRepository, ISessionRepository
+
+
+class SessionRepository(ISessionRepository):
+  async def get_active_session(self, user_id: int) -> UserSession | None:
+    async with asession() as session:
+      stmt = select(UserSession).where(
+          UserSession.user_id == user_id,
+          UserSession.is_active == True
+      )
+      result = await session.execute(stmt)
+      return result.scalar_one_or_none()
+
+  async def create_session(self, user_id: int) -> UserSession:
+    async with asession.begin() as session:
+      new_session = UserSession(user_id=user_id, is_active=True)
+      session.add(new_session)
+      return new_session
+
+  async def close_active_session(self, user_id: int) -> None:
+    async with asession.begin() as session:
+      stmt = update(UserSession).where(
+          UserSession.user_id == user_id,
+          UserSession.is_active == True
+      ).values(is_active=False)
+      await session.execute(stmt)
 
 class UserRepository(IUserRepository):
     async def get_or_create(self, user_id: int, defaults: dict) -> User:
@@ -24,8 +50,19 @@ class UserRepository(IUserRepository):
             return result.scalars().all()
 
 class AnswerRepository(IAnswerRepository):
-    async def create(self, user_id: int, question: str, bot_answer: str) -> Answer:
-        async with asession.begin() as session:
-            answer = Answer(user_id=user_id, question=question, bot_answer=bot_answer)
-            session.add(answer)
-            return answer
+  async def create(self, session_id: str, question: str,
+      bot_answer: str) -> Answer:
+    async with asession.begin() as session:
+      answer = Answer(session_id=session_id, question=question,
+                      bot_answer=bot_answer)
+      session.add(answer)
+      return answer
+
+  async def get_session_answers(self, session_id: str, limit: int = 5) -> List[
+    Answer]:
+    async with asession() as session:
+      stmt = select(Answer).where(Answer.session_id == session_id).order_by(
+        desc(Answer.created_at)).limit(limit)
+      result = await session.execute(stmt)
+      answers = result.scalars().all()
+      return list(reversed(answers))

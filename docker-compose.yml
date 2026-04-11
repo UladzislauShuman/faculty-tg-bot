@@ -7,8 +7,10 @@ services:
     entrypoint: ["python", "-m", "src.tg_bot.server-startup"]
     ports:
       - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - OLLAMA_HOST=http://ollama:11434
+      - OLLAMA_HOST=${OLLAMA_HOST}
       - TGSERVER__TOKEN=${TGSERVER__TOKEN}
       - TGSERVER__WEBHOOK_URL=${TGSERVER__WEBHOOK_URL}
       - DB__HOST=postgres
@@ -17,33 +19,12 @@ services:
       - DB__USER=${DB__USER}
       - DB__PASS=${DB__PASS}
       - LLM_PROVIDER=ollama
-    volumes:
-      - ./src:/app/src
-      - ./config:/app/config
-      - ./data:/app/data
-      - ./qa-test-set.yaml:/app/qa-test-set.yaml
-      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
-    depends_on:
-      postgres:
-        condition: service_healthy
-      ollama:
-        condition: service_started
-    restart: unless-stopped
-
-  rag-cli:
-    build: .
-    container_name: rag_cli_prod
-    entrypoint: ["tail", "-f", "/dev/null"]
-    environment:
-      - OLLAMA_HOST=http://ollama:11434
-      - DB__HOST=postgres
-      - DB__PORT=5432
-      - DB__NAME=${DB__NAME}
-      - DB__USER=${DB__USER}
-      - DB__PASS=${DB__PASS}
-      - LLM_PROVIDER=ollama
-      - TGSERVER__TOKEN=${TGSERVER__TOKEN}
-      - TGSERVER__WEBHOOK_URL=${TGSERVER__WEBHOOK_URL}
+      - YANDEX_GPT_SECRET=${YANDEX_GPT_SECRET}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
+      - ANONYMIZED_TELEMETRY=False
     volumes:
       - ./src:/app/src
       - ./config:/app/config
@@ -54,12 +35,45 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      ollama:
-        condition: service_started
+    restart: unless-stopped
+
+  rag-cli:
+    build: .
+    container_name: rag_cli_prod
+    entrypoint: ["tail", "-f", "/dev/null"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST} # OLLAMA_HOST=http://ollama:11435 для Докера или  OLLAMA_HOST=http://host.docker.internal:11434 если есть локально запущенная
+      - DB__HOST=postgres
+      - DB__PORT=5432
+      - DB__NAME=${DB__NAME}
+      - DB__USER=${DB__USER}
+      - DB__PASS=${DB__PASS}
+      - LLM_PROVIDER=ollama
+      - TGSERVER__TOKEN=${TGSERVER__TOKEN}
+      - TGSERVER__WEBHOOK_URL=${TGSERVER__WEBHOOK_URL}
+      - YANDEX_GPT_SECRET=${YANDEX_GPT_SECRET}
+      - LANGCHAIN_TRACING_V2=${LANGCHAIN_TRACING_V2}
+      - LANGCHAIN_ENDPOINT=${LANGCHAIN_ENDPOINT}
+      - LANGCHAIN_API_KEY=${LANGCHAIN_API_KEY}
+      - LANGCHAIN_PROJECT=${LANGCHAIN_PROJECT}
+      - ANONYMIZED_TELEMETRY=False
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./output:/app/output
+      - ./qa-test-set.yaml:/app/qa-test-set.yaml
+      - ${HOME}/.cache/huggingface:/root/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   ollama:
     image: ollama/ollama
     container_name: ollama_service_prod
+    profiles: ["ollama-docker"]
     volumes:
       - ./ollama_data:/root/.ollama
     ports:

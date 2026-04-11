@@ -8,42 +8,30 @@ from src.interfaces.chunker_interfaces import ChunkerInterface
 
 class ConfigurableProcessor(DataSourceProcessor):
   """
-  Гибкий обработчик, который делегирует задачу чанкинга
-  внешнему объекту-чанкеру.
-
-  Эта реализация следует принципу композиции: ее поведение
-  определяется тем, какой объект-чанкер ей передали.
+  Процессор, который отделяет логику скачивания от логики нарезки.
+  Использует принцип композиции: чанкер передается в конструктор.
   """
 
   def __init__(self, chunker: ChunkerInterface):
-    """
-    Конструктор, который принимает зависимость (чанкер).
-
-    Args:
-        chunker: Экземпляр класса, реализующего ChunkerInterface.
-    """
     self.chunker = chunker
     print(
       f"⚙️ ConfigurableProcessor инициализирован с чанкером: {chunker.__class__.__name__}")
 
   def process(self, source: str) -> List[Document]:
-    """
-    Шаг 1: Загружает сырой HTML-контент.
-    Шаг 2: Передает его в виде объекта Document в self.chunker.
-    """
     print(f"⚙️ Обработка {source} с помощью ConfigurableProcessor...")
     try:
+      # 1. Скачиваем HTML
       response = requests.get(source, headers={"User-Agent": "Mozilla/5.0"},
                               timeout=10, verify=False)
       response.raise_for_status()
 
-      # Создаем один большой документ из всей страницы
+      # 2. Оборачиваем в Document
       full_document = Document(
           page_content=response.text,
           metadata={"source": source}
       )
 
-      # Делегируем разбиение на чанки нашему чанкеру
+      # 3. Делегируем нарезку чанкеру
       chunks = self.chunker.chunk(full_document)
 
       print(

@@ -1,68 +1,60 @@
-# 1. Настройки источников данных
+# 1. Источники данных
 data_source:
   type: web
-  url: "https://fpmi.bsu.by/about"
-  max_depth: 10
+  url: "https://fpmi.bsu.by/about" # Стартовая точка для краулера
+  max_depth: 10 # Как глубоко уходить по ссылкам
   sitemap_only: false
-  test_urls:
-    # qa-test-set.yaml
-    - "https://fpmi.bsu.by/enrollee"
-    - "https://fpmi.bsu.by/about"
-    - "https://fpmi.bsu.by/dean-office"
-    - "https://fpmi.bsu.by/master-degree"
-    - "https://fpmi.bsu.by/olympiads"
 
-    - "https://fpmi.bsu.by/graduate"
-    - "https://fpmi.bsu.by/departments"
-    - "https://fpmi.bsu.by/science"
-    - "https://fpmi.bsu.by/employee"
-# 2. Настройки Embedding-модели (Основная, для поиска и хранения векторов)
+# 2. Модель для векторизации (Embeddings)
+# Используется для создания базы и поиска.
 embedding_model:
-  # Используем e5-small вместо large для скорости на CPU (Mac M4)
-  # Если памяти много (>16GB свободной), можно вернуть large
-  name: "intfloat/multilingual-e5-small"
+  name: "intfloat/multilingual-e5-small" # Легкая модель, оптимизированная под CPU
   device: "cpu"
-  normalize_embeddings: true
+  normalize_embeddings: true # Важно для косинусного сходства
 
-# [НОВОЕ] Настройки модели для оценки качества (LLM-as-a-Judge / Similarity)
-# Используется только в режиме 'test'
+# 3. Модель для оценки (Evaluation)
+# Используется только в тестах (main.py test) как независимый судья.
 evaluation_model:
-  name: "cointegrated/rubert-tiny2" # Очень быстрая и легкая (45MB)
+  name: "cointegrated/rubert-tiny2" # Очень быстрая русская модель
   device: "cpu"
 
-# 3. Настройки Ретриверов
+# 4. Настройки Поиска (Retrieval)
 retrievers:
   # Настройки для векторного поиска (ChromaDB)
   vector_store:
-    # db_path_base используется для генерации путей в тестах (data/chroma_db_markdown)
-    db_path_base: "data/chroma_db"
-    # db_path - это путь по умолчанию для Продакшена (Бот читает отсюда)
-    db_path: "data/chroma_db"
+    db_path_base: "data/chroma_db" # для генерации путей в тестах (data/chroma_db_markdown)
+    db_path: "data/chroma_db" # путь по умолчанию для "продакшена" (Бот читает отсюда)
     search_k: 5 # Сколько документов изначально искать
 
-  # Настройки для поиска по ключевым словам (BM25)
+  # Поиск по ключевым словам (Sparse retrieval)
   bm25:
     index_path_base: "data/bm25_index.pkl"
     index_path: "data/bm25_index.pkl"
 
+  # Веса для гибридного поиска (сумма должна быть 1.0)
+  hybrid_weights:
+    vector: 0.7
+    keyword: 0.3
   # Настройки для Re-ranker'а (Переранжирование)
   reranker:
-    # Заменили английскую модель на русскую для лучшего качества
     model: "DiTy/cross-encoder-russian-msmarco"
-    top_n: 3 # Сколько лучших документов отдавать в LLM
+    top_n: 3 # Сколько документов отдавать в LLM после переранжирования
 
-# 4. Настройки LLM-провайдеров (Генерация ответа)
+# 5. Настройки LLM (Генерация)
 providers:
   ollama:
     type: ollama
-    model: "llama3.1" # Убедись, что модель загружена: ollama pull llama3.1
+    model: "llama3.1"
 
   yandex_gpt:
     type: yandex_gpt
     model: "yandexgpt-lite"
-    secret: "YOUR_YANDEX_SECRET_KEY_HERE"
 
-# 5. Настройки путей (Логи и артефакты)
+# 6. Настройки тестирования (Evaluation)
+evaluation_settings:
+  mode: "all" # Варианты: all (всё), questions (только одиночные), scenarios (только диалоги)
+
+# 7. Пути к файлам
 paths:
   output_dir: "output"
   qa_test_set: "qa-test-set.yaml"
