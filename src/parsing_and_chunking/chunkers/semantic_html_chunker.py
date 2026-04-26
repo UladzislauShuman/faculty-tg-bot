@@ -15,7 +15,7 @@ class SemanticHTMLChunker(ChunkerInterface):
   4. Особая обработка таблиц (сохранение связи "Колонка-Значение").
   """
 
-  def __init__(self, min_chunk_size: int = 50, max_chunk_size: int = 2000):
+  def __init__(self, min_chunk_size: int = 50, max_chunk_size: int = 1000):
     self.min_chunk_size = min_chunk_size
     self.max_chunk_size = max_chunk_size
     self.headers_stack = {}

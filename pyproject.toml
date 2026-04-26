@@ -1,0 +1,71 @@
+[project]
+name = "faculty-tg-bot"
+version = "0.1.0"
+description = "RAG Telegram Bot for FAMCS"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    # --- Core Runtime ---
+    "torch",
+    "urllib3<2.3.0",
+    "torchvision",
+    "numpy>=1.26.4,<2.0.0",
+    "pydantic>=2.10.6,<3.0.0",
+    "pydantic-settings>=2.7.1",
+
+    # --- LangChain Stack (0.3.x) ---
+    "langchain==0.3.17",
+    "langchain-community==0.3.16",
+    "langchain-core==0.3.33",
+    "langchain-text-splitters==0.3.5",
+    "langchain-chroma==0.1.4",
+    "langchain-huggingface==0.1.2",
+    "langchain-ollama==0.2.3",
+    "langchain-qdrant==0.2.1",
+    "langsmith>=0.3.0",
+
+    # --- Telegram Bot ---
+    "aiogram==3.17.0",
+
+    # --- Database & ORM ---
+    "sqlalchemy==2.0.37",
+    "alembic==1.14.1",
+    "asyncpg==0.30.0",
+    "psycopg2-binary==2.9.10",
+
+    # --- Vector DB & Search ---
+    "chromadb==0.5.23",
+    "qdrant-client==1.13.2",
+    "rank-bm25==0.2.2",
+    "sentence-transformers>=3.4.1",
+    "fastembed==0.4.2",
+
+    # --- Parsing & Data Processing ---
+    "beautifulsoup4==4.13.3",
+    "lxml==5.3.0",
+    "markdownify==0.14.1",
+    "requests==2.32.3",
+    "pandas==2.2.3",
+    "openpyxl==3.1.5",
+    "unstructured==0.16.16",
+    "unstructured-inference==0.8.1",
+    "unstructured-client==0.30.0",
+
+    # --- Utilities ---
+    "python-dotenv==1.0.1",
+    "PyYAML==6.0.2",
+    "dependency-injector==4.45.0",
+    "yandexcloud==0.354.0",
+    "scikit-learn>=1.6.1",
+    "nltk==3.9.1",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }

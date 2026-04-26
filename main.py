@@ -113,22 +113,35 @@ def main():
 
   elif args.command == "index":
     print(f"🚀 Запуск ПРОДАКШН индексации (Chunker: {args.chunker})...")
+
+    # Извлекаем настройки из конфига
     prod_db_path = config['retrievers']['vector_store']['db_path']
     prod_bm25_path = config['retrievers']['bm25']['index_path']
-    print(f"⚠️  ВНИМАНИЕ: Полная очистка текущей базы: {prod_db_path}")
-    try:
-      shutil.rmtree(prod_db_path)
-      if os.path.exists(prod_bm25_path): os.remove(prod_bm25_path)
-    except OSError as e:
-      sys.exit(f"❌ Не удалось очистить базу: {e}\nОстановите бота.")
+    active_retriever = config['retrievers'].get('active_type', 'chroma_bm25')
+    print(
+      f"⚠️  ВНИМАНИЕ: Подготовка к переиндексации (Активный ретривер: {active_retriever})")
 
+    # Безопасная очистка локальных индексов
+    try:
+      if os.path.exists(prod_db_path):
+        print(f"🧹 Удаление старой папки Chroma: {prod_db_path}")
+        shutil.rmtree(prod_db_path)
+      if os.path.exists(prod_bm25_path):
+        print(f"🧹 Удаление старого файла BM25: {prod_bm25_path}")
+        os.remove(prod_bm25_path)
+      # Примечание: Если выбран Qdrant, коллекция будет пересоздана
+      # внутри функции run_indexing (параметр force_recreate=True)
+    except OSError as e:
+      sys.exit(
+        f"❌ Ошибка при очистке локальных файлов: {e}\nУбедитесь, что файлы не заняты другим процессом.")
+    # Инициализация процессора через DI
     try:
       processor_provider = getattr(container, f"{args.chunker}_processor")
       container.data_processor.override(processor_provider)
     except AttributeError:
-      sys.exit(f"❌ Ошибка: Чанкер {args.chunker} не найден.")
-
+      sys.exit(f"❌ Ошибка: Чанкер '{args.chunker}' не найден в DI-контейнере.")
     processor = container.data_processor()
+    # Запуск универсального пайплайна индексации
     run_indexing(config, processor, args.mode)
 
   elif args.command == "retrieve":
@@ -138,7 +151,7 @@ def main():
       docs = retrieval_step.invoke(args.query)
       for d in docs:
         print(
-            f"\n--- {d.metadata.get('title', 'Doc')} ---\n{d.page_content[:200]}...")
+            f"\n--- {d.metadata.get('title', 'Doc')} ---\n{d.page_content}")
 
 
   elif args.command == "answer":

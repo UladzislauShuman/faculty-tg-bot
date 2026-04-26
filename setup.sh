@@ -69,7 +69,7 @@ echo -e "\n${YELLOW}3/8. Сборка и запуск контейнеров...$
 if [ "$USE_NATIVE_OLLAMA" = true ]; then
     echo -e "${GREEN}💡 РЕЖИМ NATIVE: Запускаю только бота и базу...${NC}"
     # Явно указываем сервисы. Благодаря профилю в docker-compose, ollama не запустится.
-    docker-compose up -d --build bot rag-cli postgres
+    docker-compose up -d --build bot rag-cli postgres qdrant
     # На всякий случай принудительно гасим контейнер, если он висел с прошлого раза
     docker-compose stop ollama || true
 else
@@ -142,6 +142,7 @@ echo -e "      ${GREEN}✓ База данных готова.${NC}"
 
 echo -e "\n${YELLOW}6/8. Индексация данных (RAG)...${NC}"
 echo "Запускаем индексацию в тестовом режиме (быстро)..."
+sleep 5
 docker-compose exec rag-cli python main.py index test
 echo -e "      ${GREEN}✓ Данные проиндексированы и векторная база создана.${NC}"
 

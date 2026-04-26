@@ -12,3 +12,6 @@ hf_cache/
 ollama_data/
 .idea/
 /todo.md
+/qa_output/
+/.cursorrules
+/.cursor/

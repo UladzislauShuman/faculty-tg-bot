@@ -20,6 +20,15 @@ evaluation_model:
 
 # 4. Настройки Поиска (Retrieval)
 retrievers:
+  active_type: "qdrant" # Варианты: chroma_bm25, qdrant
+
+  # --- Qdrant ---
+  qdrant:
+    host: "localhost" # Замени на "qdrant", если запускаешь скрипты внутри Docker
+    port: 6333
+    collection_name: "fpmi_docs"
+    search_k: 5
+
   # Настройки для векторного поиска (ChromaDB)
   vector_store:
     db_path_base: "data/chroma_db" # для генерации путей в тестах (data/chroma_db_markdown)
@@ -37,6 +46,8 @@ retrievers:
     keyword: 0.3
   # Настройки для Re-ranker'а (Переранжирование)
   reranker:
+    enabled: true            # Легкое включение/отключение для экспериментов
+    type: "cross_encoder"
     model: "DiTy/cross-encoder-russian-msmarco"
     top_n: 3 # Сколько документов отдавать в LLM после переранжирования
 
