@@ -18,6 +18,18 @@ evaluation_model:
   name: "cointegrated/rubert-tiny2" # Очень быстрая русская модель
   device: "cpu"
 
+# 3.5 Настройки LLM-судьи (Evaluation Metrics)
+evaluation_metrics:
+  enabled: true                # Флаг: false — используется старый evaluator
+  judge_llm:
+    type: "ollama"             # Тот же провайдер, что и у generation LLM
+    model: "llama3.1"          # Должна быть загружена: ollama pull llama3.1
+    temperature: 0.0           # Детерминированные оценки, быстрее TTFT
+  metrics:
+    faithfulness: true         # Проверка галлюцинаций
+    answer_relevance: true     # Проверка релевантности ответа
+  timeout_seconds: 60          # asyncio.wait_for timeout на каждый LLM-вызов
+
 # 4. Настройки Поиска (Retrieval)
 retrievers:
   active_type: "qdrant" # Варианты: chroma_bm25, qdrant

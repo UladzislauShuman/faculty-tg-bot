@@ -68,11 +68,14 @@ def create_retrieval_chain_test(config: dict, retriever: BaseRetriever) -> Runna
     return RunnableLambda(lambda q: retriever.invoke(q))
 
 def get_llm_from_config(provider_config: dict):
+    if not isinstance(provider_config, dict):
+        provider_config = dict(provider_config)
     provider_type = provider_config.get("type")
     if provider_type == "ollama":
         return Ollama(
             model=provider_config.get("model"),
-            base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434")
+            base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+            temperature=provider_config.get("temperature", 0.7),
         )
     elif provider_type == "yandex_gpt":
         secret_key = os.getenv("YANDEX_GPT_SECRET")

@@ -108,7 +108,18 @@ def main():
   container.config.from_dict(config)
 
   if args.command == "test":
-    runner = TestPipelineRunner(container, config)
+    em = config.get("evaluation_metrics") or {}
+    use_judge = bool(em.get("enabled", False))
+    runner = TestPipelineRunner(
+        container,
+        config,
+        faithfulness_evaluator=(
+            container.faithfulness_evaluator() if use_judge else None
+        ),
+        relevance_evaluator=(
+            container.relevance_evaluator() if use_judge else None
+        ),
+    )
     asyncio.run(runner.run(args))
 
   elif args.command == "index":

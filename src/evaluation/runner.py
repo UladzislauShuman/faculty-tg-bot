@@ -1,13 +1,12 @@
 import os
 import time
-import uuid
 import sys
 import asyncio
 from datetime import datetime
-from typing import List, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.evaluation import load_evaluator
+from src.evaluation.schemas import EvalScore
+from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
 from src.util.yaml_parser import TestSetLoader
 
 
@@ -20,13 +19,25 @@ class TestPipelineRunner:
   MAX_CONTEXT_CHARS = 12000
   HIT_RATE_THRESHOLD = 0.4
 
-  def __init__(self, container, config: Dict):
+  def __init__(
+    self,
+    container: Any,
+    config: Dict,
+    faithfulness_evaluator: Optional[FaithfulnessEvaluator] = None,
+    relevance_evaluator: Optional[RelevanceEvaluator] = None,
+  ) -> None:
     self.container = container
     self.config = config
     self.output_dir = config['paths']['output_dir']
     self.user_service = container.bot_user_service()
     self.session_service = container.bot_session_service()
     self.answer_service = container.bot_answer_service()
+    self.faithfulness_evaluator: Optional[FaithfulnessEvaluator] = (
+        faithfulness_evaluator
+    )
+    self.relevance_evaluator: Optional[RelevanceEvaluator] = (
+        relevance_evaluator
+    )
 
   def _simple_ru_stem(self, word: str) -> str:
     """Примитивный стемминг."""
@@ -36,6 +47,54 @@ class TestPipelineRunner:
       if word.endswith(ending) and len(word) > len(ending) + 2:
         return word[:-len(ending)]
     return word
+
+  async def _aevaluate_judge_scores(
+    self,
+    question: str,
+    answer: str,
+    full_context: str,
+  ) -> Tuple[Optional[EvalScore], Optional[EvalScore]]:
+    """Последовательные LLM-вызовы судьи (экономия RAM)."""
+    em = self.config.get("evaluation_metrics") or {}
+    mflags = em.get("metrics") or {}
+    faith_score: Optional[EvalScore] = None
+    rel_score: Optional[EvalScore] = None
+    if self.faithfulness_evaluator and mflags.get("faithfulness", True):
+      faith_score = await self.faithfulness_evaluator.aevaluate(
+          answer=answer, context=full_context
+      )
+    if self.relevance_evaluator and mflags.get("answer_relevance", True):
+      rel_score = await self.relevance_evaluator.aevaluate(
+          question=question, answer=answer
+      )
+    return faith_score, rel_score
+
+  @staticmethod
+  def _aggregate_judge_score(
+    faith: Optional[EvalScore],
+    rel: Optional[EvalScore],
+  ) -> float:
+    if faith and rel:
+      return (faith.score + rel.score) / 2.0
+    if faith:
+      return float(faith.score)
+    if rel:
+      return float(rel.score)
+    return 0.0
+
+  def _build_full_context_from_docs(
+    self, docs: list, max_chars: int = MAX_CONTEXT_CHARS
+  ) -> str:
+    current_chars = 0
+    parts: List[str] = []
+    for d in docs or []:
+      block = f"Источник: {d.metadata.get('source')}\n{d.page_content}"
+      if current_chars + len(block) < max_chars:
+        parts.append(block)
+        current_chars += len(block)
+      else:
+        break
+    return "\n\n".join(parts)
 
   def _calculate_hit_rate(self, reference: str, retrieved_docs) -> int:
     """Эвристическая проверка: нашел ли ретривер ответ."""
@@ -50,8 +109,19 @@ class TestPipelineRunner:
         return 1
     return 0
 
-  def _append_to_trace(self, file_handle, i, qa, docs, answer, score, latency,
-      hit):
+  def _append_to_trace(
+      self,
+      file_handle,
+      i,
+      qa: Dict,
+      docs,
+      answer: str,
+      score: float,
+      latency: float,
+      hit: int,
+      faithfulness: Optional[EvalScore] = None,
+      relevance: Optional[EvalScore] = None,
+  ) -> None:
     """Пишет лог в файл в реальном времени."""
     file_handle.write(f"## ❓ Вопрос {i}: {qa['question']}\n\n")
     file_handle.write(f"### 🔎 Найденные документы (Top-{len(docs)})\n")
@@ -65,7 +135,16 @@ class TestPipelineRunner:
     file_handle.write(f"### 📏 Оценка\n")
     file_handle.write(f"- **Эталон:** {qa['answer']}\n")
     file_handle.write(
-        f"- **Метрики:** {icon} | Sim: **{score:.4f}** | Time: {latency:.2f}s\n")
+        f"- **Метрики:** {icon} | Score: **{score:.4f}** | Time: {latency:.2f}s\n"
+    )
+    if faithfulness is not None:
+      file_handle.write(
+          f"- **Faithfulness:** {faithfulness.score:.2f} — {faithfulness.reason}\n"
+      )
+    if relevance is not None:
+      file_handle.write(
+          f"- **Relevance:** {relevance.score:.2f} — {relevance.reason}\n"
+      )
     file_handle.write("\n---\n\n")
     file_handle.flush()
 
@@ -78,17 +157,50 @@ class TestPipelineRunner:
       f.write(f"# 📊 Отчет о тестировании RAG\n")
       f.write(f"**Дата:** {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
       f.write(
-          f"**Конфигурация:** Chunker=`{args.chunker}`, Mode=`{args.index_mode}`, Retriever=`{args.retriever}`\n\n")
+          f"**Конфигурация:** Chunker=`{args.chunker}`, Mode=`{args.index_mode}`, Retriever=`{args.retriever}`\n\n"
+      )
       f.write("## 📈 Сводные метрики\n")
       f.write(f"- **Hit Rate:** {avg_metrics['hit']:.2%}\n")
-      f.write(f"- **Similarity:** {avg_metrics['sim']:.4f}\n")
-      f.write(f"- **Latency:** {avg_metrics['lat']:.2f}s\n\n")
+      f.write(
+          f"- **Score (judge, среднее по шагам):** {avg_metrics['sim']:.4f}\n"
+      )
+      f.write(f"- **Средняя задержка (latency):** {avg_metrics['lat']:.2f}s\n")
 
-      f.write("## 📝 Детализация\n")
+      rows_f = [r for r in results if r.get("faithfulness") is not None]
+      rows_r = [r for r in results if r.get("relevance") is not None]
+      if rows_f or rows_r:
+        f.write("\n### LLM-as-a-Judge (по шагам с оценкой)\n")
+        if rows_f:
+          avg_faith = sum(r["faithfulness"] for r in rows_f) / len(rows_f)
+          f.write(f"- **Avg Faithfulness:** {avg_faith:.4f} _(n={len(rows_f)})_\n")
+        if rows_r:
+          avg_rel = sum(r["relevance"] for r in rows_r) / len(rows_r)
+          f.write(f"- **Avg Relevance:** {avg_rel:.4f} _(n={len(rows_r)})_\n")
+        f.write(
+            "\n*Faithfulness = опора ответа на retrieved-контекст; Relevance = соответствие вопросу.*\n"
+        )
+      f.write("\n---\n\n")
+
+      f.write("## 📝 Детализация по вопросам\n")
       for i, res in enumerate(results, 1):
         icon = "✅" if res['hit'] else "❌"
-        f.write(
-            f"### {i}. {res['q']}\n- **Эталон:** {res['ref']}\n- **Ответ:** {res['a']}\n- **Метрики:** {icon} Hit={res['hit']} | Sim={res['score']:.4f}\n\n")
+        line = (
+            f"### {i}. {res['q']}\n"
+            f"- **Эталон:** {res['ref']}\n"
+            f"- **Ответ:** {res['a']}\n"
+            f"- **Метрики:** {icon} Hit={res['hit']} | "
+            f"Score={res['score']:.4f}\n"
+        )
+        f_extra = res.get("faithfulness")
+        r_extra = res.get("relevance")
+        if f_extra is not None or r_extra is not None:
+          bits = []
+          if f_extra is not None:
+            bits.append(f"F={f_extra:.3f}")
+          if r_extra is not None:
+            bits.append(f"R={r_extra:.3f}")
+          line = line.rstrip() + f" | {' / '.join(bits)}\n"
+        f.write(line + "\n")
 
     print(f"\n📄 Отчет сохранен: {report_path}")
 
@@ -126,14 +238,6 @@ class TestPipelineRunner:
         first_name="TestRunner",
         username="test_bot"
     )
-
-    # Оценщик
-    eval_emb = HuggingFaceEmbeddings(
-        model_name=self.config.get('evaluation_model', {}).get('name',
-                                                               'cointegrated/rubert-tiny2'),
-        model_kwargs={'device': 'cpu'}
-    )
-    evaluator = load_evaluator("embedding_distance", embeddings=eval_emb)
 
     # Трассировка
     os.makedirs(self.output_dir, exist_ok=True)
@@ -186,19 +290,34 @@ class TestPipelineRunner:
                   {"context": full_context, "question": qa['question']})
               latency = time.time() - start_time
 
-              dist = evaluator.evaluate_strings(prediction=response,
-                                                reference=qa['answer'])['score']
-              score = 1.0 - dist
+              faith_score, rel_score = await self._aevaluate_judge_scores(
+                  qa['question'], response, full_context
+              )
+              score = self._aggregate_judge_score(faith_score, rel_score)
 
-              self._append_to_trace(trace_file, i + 1, qa, safe_docs, response,
-                                    score, latency, hit)
+              self._append_to_trace(
+                  trace_file,
+                  i + 1,
+                  qa,
+                  safe_docs,
+                  response,
+                  score,
+                  latency,
+                  hit,
+                  faithfulness=faith_score,
+                  relevance=rel_score,
+              )
 
               icon = "✅" if hit else "❌"
-              print(f"   -> {icon} Hit | Sim: {score:.2f} | {latency:.1f}s")
+              print(
+                  f"   -> {icon} Hit | Score: {score:.2f} | {latency:.1f}s"
+              )
 
               results.append({
                 "q": qa['question'], "a": response, "ref": qa['answer'],
-                "score": score, "latency": latency, "hit": hit
+                "score": score, "latency": latency, "hit": hit,
+                "faithfulness": faith_score.score if faith_score else None,
+                "relevance": rel_score.score if rel_score else None,
               })
             except Exception as e:
               print(f"   -> ❌ Error: {e}")
@@ -240,23 +359,38 @@ class TestPipelineRunner:
                 # 3. Считаем метрики
                 hit = self._calculate_hit_rate(step['a'], docs)
                 total_hit_rate += hit
-                dist = evaluator.evaluate_strings(prediction=bot_answer,
-                                                  reference=step['a'])['score']
-                score = 1.0 - dist
+                full_context = self._build_full_context_from_docs(docs)
+                faith_score, rel_score = await self._aevaluate_judge_scores(
+                    step['q'], bot_answer, full_context
+                )
+                score = self._aggregate_judge_score(faith_score, rel_score)
 
                 # 4. Логируем
                 step_qa = {"question": step['q'], "answer": step['a']}
-                self._append_to_trace(trace_file,
-                                      f"[{sc['name']}] Шаг {step_idx}", step_qa,
-                                      docs, bot_answer, score, latency, hit)
+                self._append_to_trace(
+                    trace_file,
+                    f"[{sc['name']}] Шаг {step_idx}",
+                    step_qa,
+                    docs,
+                    bot_answer,
+                    score,
+                    latency,
+                    hit,
+                    faithfulness=faith_score,
+                    relevance=rel_score,
+                )
 
                 icon = "✅" if hit else "❌"
-                print(f"     -> {icon} Hit | Sim: {score:.2f} | {latency:.1f}s")
+                print(
+                    f"     -> {icon} Hit | Score: {score:.2f} | {latency:.1f}s"
+                )
 
                 results.append({
                   "q": f"[{sc['name']}] {step['q']}", "a": bot_answer,
                   "ref": step['a'],
-                  "score": score, "latency": latency, "hit": hit
+                  "score": score, "latency": latency, "hit": hit,
+                  "faithfulness": faith_score.score if faith_score else None,
+                  "relevance": rel_score.score if rel_score else None,
                 })
               except Exception as e:
                 print(f"     -> ❌ Error: {e}")
@@ -274,8 +408,20 @@ class TestPipelineRunner:
       print("\n" + "=" * 60)
       print(f"📊 ИТОГИ ({args.chunker} | Режим: {test_mode})")
       print(f"✅ Hit Rate: {avg_metrics['hit']:.2%}")
-      print(f"✅ Similarity: {avg_metrics['sim']:.4f}")
+      print(f"✅ Score (aggregate): {avg_metrics['sim']:.4f}")
       print(f"⏱️  Avg Latency: {avg_metrics['lat']:.2f}s")
+      rows_f = [r for r in results if r.get("faithfulness") is not None]
+      rows_r = [r for r in results if r.get("relevance") is not None]
+      if rows_f:
+        print(
+            f"✅ Avg Faithfulness: {sum(r['faithfulness'] for r in rows_f) / len(rows_f):.4f} "
+            f"(n={len(rows_f)})"
+        )
+      if rows_r:
+        print(
+            f"✅ Avg Relevance: {sum(r['relevance'] for r in rows_r) / len(rows_r):.4f} "
+            f"(n={len(rows_r)})"
+        )
       self._save_final_report(results, args, avg_metrics)
     else:
       print(

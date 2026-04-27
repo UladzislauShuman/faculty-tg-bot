@@ -9,8 +9,10 @@ from src.pipelines.rag.pipeline import (
   create_rag_chain,
   create_final_retriever,
   create_search_only_chain,
-  create_generation_chain
+  create_generation_chain,
+  get_llm_from_config,
 )
+from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
 
 # Импорты Ретриверов и Реранкеров
 from src.retrievers.chroma_bm25 import create_chroma_bm25_retriever
@@ -93,8 +95,24 @@ class Container(containers.DeclarativeContainer):
   )
 
   rag_chain = providers.Factory(
-      create_rag_chain,
-      config=config,
-      retriever=final_retriever,
-      answer_repo=bot_answer_repo
+    create_rag_chain,
+    config=config,
+    retriever=final_retriever,
+    answer_repo=bot_answer_repo
+  )
+
+  # --- Evaluation (LLM-as-a-Judge) ---
+  judge_llm = providers.Factory(
+      get_llm_from_config,
+      provider_config=config.evaluation_metrics.judge_llm,
+  )
+  faithfulness_evaluator = providers.Factory(
+      FaithfulnessEvaluator,
+      llm=judge_llm,
+      timeout=config.evaluation_metrics.timeout_seconds,
+  )
+  relevance_evaluator = providers.Factory(
+      RelevanceEvaluator,
+      llm=judge_llm,
+      timeout=config.evaluation_metrics.timeout_seconds,
   )
