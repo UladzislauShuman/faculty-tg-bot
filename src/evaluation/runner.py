@@ -1,6 +1,7 @@
 import os
-import time
+import re
 import sys
+import time
 import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,6 +39,38 @@ class TestPipelineRunner:
     self.relevance_evaluator: Optional[RelevanceEvaluator] = (
         relevance_evaluator
     )
+
+  @staticmethod
+  def _sanitize_filename_token(value: str) -> str:
+    s = str(value).replace(os.sep, "-")
+    s = re.sub(r"[^0-9A-Za-z._+]+", "-", s)
+    return s.strip("-") or "x"
+
+  def _output_label_stem(self, args: Any) -> str:
+    """
+    Суффикс для report_*.md / trace_*.md:
+    eval_mode-chunker-retriever_strategy-index_mode-force_flag-retriever_type-memory_type-timestamp
+    """
+    eval_mode = (
+        getattr(args, "eval_mode", None)
+        or self.config.get("evaluation_settings", {}).get("mode", "all")
+    )
+    chunker = getattr(args, "chunker", "markdown")
+    retriever_strategy = getattr(args, "retriever", "hybrid")
+    index_mode = getattr(args, "index_mode", "test")
+    force_flag = "force" if getattr(args, "force_index", False) else "noforce"
+    retriever_type = self.config.get("retrievers", {}).get("active_type", "na")
+    mem = self.config.get("memory") or {}
+    if not mem.get("enabled", False):
+      memory_type = "off"
+    else:
+      memory_type = mem.get("type", "na")
+    ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    parts = [
+        eval_mode, chunker, retriever_strategy, index_mode, force_flag,
+        retriever_type, memory_type, ts,
+    ]
+    return "-".join(self._sanitize_filename_token(p) for p in parts)
 
   def _simple_ru_stem(self, word: str) -> str:
     """Примитивный стемминг."""
@@ -148,9 +181,12 @@ class TestPipelineRunner:
     file_handle.write("\n---\n\n")
     file_handle.flush()
 
-  def _save_final_report(self, results, args, avg_metrics):
+  def _save_final_report(
+      self, results, args, avg_metrics, output_stem: Optional[str] = None
+  ) -> None:
     """Сохраняет итоговый отчет."""
-    filename = f"report_{args.chunker}_{args.index_mode}.md"
+    stem = output_stem or self._output_label_stem(args)
+    filename = f"report_{stem}.md"
     report_path = os.path.join(self.output_dir, filename)
 
     with open(report_path, "w", encoding="utf-8") as f:
@@ -239,10 +275,10 @@ class TestPipelineRunner:
         username="test_bot"
     )
 
-    # Трассировка
+    # Трассировка: имя trace/report с одинаковой меткой на прогон
     os.makedirs(self.output_dir, exist_ok=True)
-    trace_path = os.path.join(self.output_dir,
-                              f"trace_{args.chunker}_{datetime.now().strftime('%H%M')}.md")
+    output_stem = self._output_label_stem(args)
+    trace_path = os.path.join(self.output_dir, f"trace_{output_stem}.md")
     print(f"📝 Лог: {trace_path}")
 
     results = []
@@ -250,7 +286,11 @@ class TestPipelineRunner:
 
     with open(trace_path, "w", encoding="utf-8") as trace_file:
       trace_file.write(
-        f"# Trace Log\nConfig: {args.chunker}\nTest Mode: {test_mode}\n\n")
+        f"# Trace Log\nLabel: `{output_stem}`\n"
+        f"Chunker: {args.chunker} | Test mode: {test_mode} | "
+        f"active_type: {self.config.get('retrievers', {}).get('active_type', 'na')} | "
+        f"memory: {self.config.get('memory') or {}}\n\n"
+      )
 
       # =================================================================
       # БЛОК 1: ОДИНОЧНЫЕ ВОПРОСЫ
@@ -422,7 +462,7 @@ class TestPipelineRunner:
             f"✅ Avg Relevance: {sum(r['relevance'] for r in rows_r) / len(rows_r):.4f} "
             f"(n={len(rows_r)})"
         )
-      self._save_final_report(results, args, avg_metrics)
+      self._save_final_report(results, args, avg_metrics, output_stem)
     else:
       print(
         "\n⚠️ Нет результатов для отображения (проверьте qa-test-set.yaml и режим тестирования).")

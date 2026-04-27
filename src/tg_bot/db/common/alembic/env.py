@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..')))
 from src.tg_bot.db.base import Base
-from src.tg_bot.models import User, Answer
+from src.tg_bot.models import Answer, User, UserSession
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

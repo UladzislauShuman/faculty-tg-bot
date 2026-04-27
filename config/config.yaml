@@ -32,7 +32,7 @@ evaluation_metrics:
 
 # 4. Настройки Поиска (Retrieval)
 retrievers:
-  active_type: "qdrant" # Варианты: chroma_bm25, qdrant
+  active_type: "chroma_bm25" # Варианты: chroma_bm25, qdrant
 
   # --- Qdrant ---
   qdrant:
@@ -86,3 +86,15 @@ paths:
   retriever: "retriever.txt" # Лог работы ретривера
   sitemap: "sitemap.txt"
   test_pages_source: "test_pages_source.html"
+
+# 8. Память диалога (Sprint 3: semantic / summary)
+memory:
+  enabled: true                  # false = старое скользящее окно без summary
+  type: "summary_window"         # Тип: "summary_window" | "window"
+  window_size: 2                 # Кол-во последних сырых реплик (пар Q/A) после summary
+  summarization_threshold: 4     # Суммаризировать, когда answer_count >= этого значения
+  summary_llm:
+    type: "ollama"
+    model: "llama3.1"
+    temperature: 0.0
+  summary_timeout_seconds: 90    # Суммаризация дольше ответа — больший таймаут

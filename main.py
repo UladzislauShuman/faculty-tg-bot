@@ -57,6 +57,28 @@ def main():
   test_parser.add_argument("--index-mode", type=str, default="test",
                            choices=["test", "full"])
   test_parser.add_argument("--force-index", action="store_true")
+  test_parser.add_argument(
+      "--active-type",
+      dest="active_type",
+      type=str,
+      default=None,
+      choices=["chroma_bm25", "qdrant"],
+      help="Переопределить retrievers.active_type: chroma+bm25 или Qdrant hybrid.",
+  )
+  test_parser.add_argument(
+      "--memory-type",
+      dest="memory_type",
+      type=str,
+      default=None,
+      choices=["summary_window", "window"],
+      help="Переопределить memory.type (Sprint 3).",
+  )
+  test_parser.add_argument(
+      "--memory-off",
+      dest="memory_off",
+      action="store_true",
+      help="Отключить умную память: memory.enabled=false (скользящее окно).",
+  )
 
   # INDEX (Production)
   idx_parser = subparsers.add_parser("index")
@@ -92,6 +114,15 @@ def main():
 
   # Настройка путей для ТЕСТА
   if args.command == "test":
+    if getattr(args, "active_type", None):
+      config["retrievers"]["active_type"] = args.active_type
+    if "memory" not in config:
+      config["memory"] = {}
+    if getattr(args, "memory_type", None):
+      config["memory"]["type"] = args.memory_type
+    if getattr(args, "memory_off", False):
+      config["memory"]["enabled"] = False
+
     base_db = config['retrievers']['vector_store'].get('db_path_base',
                                                        'data/chroma_db')
     config['retrievers']['vector_store'][

@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import Protocol, List
+from typing import List, Optional, Protocol
 from src.tg_bot.models import User, Answer, UserSession
 
 class IUserRepository(Protocol):
@@ -18,6 +18,12 @@ class ISessionRepository(Protocol):
 
   @abstractmethod
   async def close_active_session(self, user_id: int) -> None: ...
+
+  @abstractmethod
+  async def get_summary(self, session_id: str) -> Optional[str]: ...
+
+  @abstractmethod
+  async def update_summary(self, session_id: str, summary: str) -> None: ...
 
 class IAnswerRepository(Protocol):
   @abstractmethod

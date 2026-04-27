@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Any, Optional
 from dotenv import load_dotenv
 
 from langchain_core.prompts import PromptTemplate
@@ -123,7 +123,13 @@ def create_generation_chain(config: dict) -> Runnable:
     prompt = PromptTemplate.from_template(PROMPT_TEMPLATE)
     return prompt | llm | StrOutputParser()
 
-def create_rag_chain(config: dict, retriever: BaseRetriever, answer_repo):
+def create_rag_chain(
+    config: dict,
+    retriever: BaseRetriever,
+    answer_repo: Any,
+    session_repo: Any = None,
+    summarizer: Any = None,
+):
     """Полный Conversational RAG (для бота)."""
     provider_name = os.getenv("LLM_PROVIDER", "ollama")
     provider_config = config.get('providers', {}).get(provider_name)
@@ -141,8 +147,18 @@ def create_rag_chain(config: dict, retriever: BaseRetriever, answer_repo):
     rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
 
     # 4. Функция для получения истории из нашей БД
+    mem = config.get("memory") or {}
+
     def get_session_history(session_id: str):
-        return ReadOnlyPostgresHistory(session_id=session_id, answer_repo=answer_repo)
+        return ReadOnlyPostgresHistory(
+            session_id=session_id,
+            answer_repo=answer_repo,
+            session_repo=session_repo,
+            summarizer=summarizer,
+            window_size=int(mem.get("window_size", 5)),
+            summarization_threshold=int(mem.get("summarization_threshold", 4)),
+            memory_enabled=bool(mem.get("enabled", False)),
+        )
 
     # 5. Оборачиваем в менеджер памяти
     conversational_rag_chain = RunnableWithMessageHistory(

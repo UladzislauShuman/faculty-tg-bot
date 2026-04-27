@@ -1,11 +1,12 @@
 import datetime
 import uuid
-from sqlalchemy import BigInteger, String, TIMESTAMP, ForeignKey, Boolean
+from typing import TYPE_CHECKING, Optional
+
+from sqlalchemy import BigInteger, Boolean, ForeignKey, String, Text, TIMESTAMP
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from src.tg_bot.db.base import Base
-import typing
 
-if typing.TYPE_CHECKING:
+if TYPE_CHECKING:
   from .user import User
   from .answer import Answer
 
@@ -22,6 +23,10 @@ class UserSession(Base):
 
   created_at: Mapped[datetime.datetime] = mapped_column(TIMESTAMP,
                                                         default=datetime.datetime.utcnow)
+
+  summary: Mapped[Optional[str]] = mapped_column(
+      Text, nullable=True, default=None
+  )
 
   user: Mapped["User"] = relationship(back_populates="sessions")
   answers: Mapped[list["Answer"]] = relationship(back_populates="session")

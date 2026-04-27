@@ -32,6 +32,7 @@ from src.tg_bot.repositories.implementations import UserRepository, \
   AnswerRepository, SessionRepository
 from src.tg_bot.services.implementations import UserService, AnswerService, \
   SessionService
+from src.tg_bot.services.summarizer import SummarizerService
 
 
 class Container(containers.DeclarativeContainer):
@@ -94,11 +95,24 @@ class Container(containers.DeclarativeContainer):
       config=config
   )
 
+  # --- Smart Memory (Sprint 3) ---
+  summary_llm = providers.Factory(
+      get_llm_from_config,
+      provider_config=config.memory.summary_llm,
+  )
+  summarizer_service = providers.Factory(
+      SummarizerService,
+      llm=summary_llm,
+      timeout=config.memory.summary_timeout_seconds,
+  )
+
   rag_chain = providers.Factory(
     create_rag_chain,
     config=config,
     retriever=final_retriever,
-    answer_repo=bot_answer_repo
+    answer_repo=bot_answer_repo,
+    session_repo=bot_session_repo,
+    summarizer=summarizer_service,
   )
 
   # --- Evaluation (LLM-as-a-Judge) ---

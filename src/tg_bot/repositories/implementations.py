@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from sqlalchemy import update, desc
 from sqlalchemy.future import select
 from src.tg_bot.db import asession
@@ -28,6 +28,22 @@ class SessionRepository(ISessionRepository):
           UserSession.user_id == user_id,
           UserSession.is_active == True
       ).values(is_active=False)
+      await session.execute(stmt)
+
+  async def get_summary(self, session_id: str) -> Optional[str]:
+    async with asession() as session:
+      stmt = select(UserSession).where(UserSession.id == session_id)
+      result = await session.execute(stmt)
+      row = result.scalar_one_or_none()
+      return row.summary if row else None
+
+  async def update_summary(self, session_id: str, summary: str) -> None:
+    async with asession.begin() as session:
+      stmt = (
+          update(UserSession)
+          .where(UserSession.id == session_id)
+          .values(summary=summary)
+      )
       await session.execute(stmt)
 
 class UserRepository(IUserRepository):
