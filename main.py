@@ -7,6 +7,7 @@ import sys
 
 import yaml
 from dotenv import load_dotenv
+from typing import Optional
 
 from src.di_containers import Container
 from src.pipelines.indexing.pipeline import run_indexing
@@ -39,6 +40,14 @@ def manage_db_state_for_test(config_data: dict, force_reindex: bool):
 
   print(f"✅  [TEST] Найдены существующие индексы: {db_path}")
   return False
+
+
+def _apply_hyde_cli_override(config_data: dict, hyde_choice: Optional[str]) -> None:
+  """Переопределение hyde.enabled из CLI (Sprint 6)."""
+  if hyde_choice is None:
+    return
+  hyde_section = config_data.setdefault("hyde", {})
+  hyde_section["enabled"] = hyde_choice == "on"
 
 
 # --- MAIN CLI ---
@@ -95,6 +104,16 @@ def main():
       action="store_true",
       help="Отключить умную память: memory.enabled=false (скользящее окно).",
   )
+  test_parser.add_argument(
+      "--hyde",
+      dest="hyde",
+      choices=["on", "off"],
+      default=None,
+      help=(
+          "HyDE для dense-поиска: on — включить, off — выключить; "
+          "без флага — как в config.yaml."
+      ),
+  )
 
   # INDEX (Production)
   idx_parser = subparsers.add_parser("index")
@@ -104,7 +123,15 @@ def main():
                           choices=["markdown", "semantic", "unstructured"])
 
   # RETRIEVE
-  subparsers.add_parser("retrieve").add_argument("-q", "--query")
+  ret_parser = subparsers.add_parser("retrieve")
+  ret_parser.add_argument("-q", "--query")
+  ret_parser.add_argument(
+      "--hyde",
+      dest="hyde",
+      choices=["on", "off"],
+      default=None,
+      help="Переопределить hyde.enabled (on|off); без флага — config.yaml.",
+  )
 
   # ANSWER
   ans_parser = subparsers.add_parser("answer")
@@ -112,6 +139,13 @@ def main():
                           choices=["all", "questions", "scenarios"],
                           help="Режим тестирования")
   ans_parser.add_argument("-q", "--query")
+  ans_parser.add_argument(
+      "--hyde",
+      dest="hyde",
+      choices=["on", "off"],
+      default=None,
+      help="Переопределить hyde.enabled (on|off); без флага — config.yaml.",
+  )
 
   # TEST-MATRIX (YAML evaluation_scenarios + check_points/default_checkpoint.json)
   tm_parser = subparsers.add_parser("test-matrix")
@@ -158,6 +192,16 @@ def main():
     config['retrievers']['bm25']['index_path'] = f"{base}_{args.chunker}{ext}"
 
     args.need_index = manage_db_state_for_test(config, args.force_index)
+
+  if getattr(args, "hyde", None) is not None:
+    _apply_hyde_cli_override(config, args.hyde)
+
+  _hyde_lc = logging.getLogger("src.retrievers.hyde_retriever")
+  _hyde_cfg_blk = config.get("hyde")
+  if isinstance(_hyde_cfg_blk, dict) and _hyde_cfg_blk.get("verbose_console"):
+    _hyde_lc.setLevel(logging.INFO)
+  if os.environ.get("HYDE_CONSOLE", "").lower() in ("1", "true", "yes"):
+    _hyde_lc.setLevel(logging.INFO)
 
   if args.command == "test-matrix":
     from src.evaluation.matrix_runner import run_matrix

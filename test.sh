@@ -72,6 +72,7 @@ echo -e "      ${GREEN}✓ База данных готова.${NC}\n"
 echo -e "${CYAN}Выберите способ запуска тестов:${NC}"
 echo -e "  ${GREEN}1)${NC} Быстрый запуск (Дефолтный сценарий Владислава)"
 echo -e "     ${YELLOW}[all, markdown, hybrid, test, force-index, chroma_bm25, summary_window]${NC}"
+echo -e "     HyDE (опционально): задайте ${CYAN}RAG_HYDE=on${NC} или ${CYAN}RAG_HYDE=off${NC} перед запуском; иначе — как в config.yaml"
 echo -e "  ${GREEN}2)${NC} Интерактивная настройка (Выбрать каждый параметр вручную)"
 echo -e "  ${GREEN}3)${NC} Матрица сценариев из config.yaml (python main.py test-matrix)"
 echo -e "  ${GREEN}4)${NC} Продолжить матрицу после паузы (python main.py test-matrix --resume)"
@@ -108,6 +109,12 @@ if [ "$MENU_CHOICE" == "1" ]; then
     ACTIVE_TYPE="chroma_bm25"
     MEMORY_TYPE="summary_window"
     MEMORY_OFF_FLAG=""
+    # HyDE: RAG_HYDE=on|off — передать в main.py; пусто — не переопределять config.yaml
+    HYDE_CLI=""
+    case "${RAG_HYDE,,}" in
+        on|1|yes|true)  HYDE_CLI="--hyde=on" ;;
+        off|0|no|false) HYDE_CLI="--hyde=off" ;;
+    esac
 else
     echo -e "\n${CYAN}=== ИНТЕРАКТИВНАЯ НАСТРОЙКА ===${NC}"
 
@@ -179,6 +186,20 @@ else
     else
         MEMORY_OFF_FLAG=""
     fi
+
+    # 9. HyDE (Sprint 6)
+    echo -e "\n${BLUE}9. HyDE — гипотетический dense-запрос (hyde.enabled)${NC}"
+    echo "   - config : не передавать флаг в main.py (брать из config.yaml)"
+    echo "   - on     : --hyde=on (модель — hyde.llm в config.yaml; в дефолте та же что providers.ollama)"
+    echo "   - off    : --hyde=off (явно выключить, даже если в yaml enabled: true)"
+    read -p "   Введите [config/on/off] (по умолчанию: config): " HYDE_IN
+    HYDE_IN=${HYDE_IN:-config}
+    HYDE_CLI=""
+    if [ "$HYDE_IN" == "on" ] || [ "$HYDE_IN" == "ON" ]; then
+        HYDE_CLI="--hyde=on"
+    elif [ "$HYDE_IN" == "off" ] || [ "$HYDE_IN" == "OFF" ]; then
+        HYDE_CLI="--hyde=off"
+    fi
 fi
 
 # --- Шаг 4: Формирование и запуск команды ---
@@ -196,10 +217,15 @@ if [ -n "$MEMORY_OFF_FLAG" ]; then
 else
     echo -e "   memory.enabled: ${YELLOW}как в config.yaml${NC}"
 fi
+if [ -n "$HYDE_CLI" ]; then
+    echo -e "   HyDE:         ${YELLOW}${HYDE_CLI}${NC}"
+else
+    echo -e "   HyDE:         ${YELLOW}как в config.yaml (флаг не передаётся)${NC}"
+fi
 echo -e "${CYAN}=========================================${NC}\n"
 
 # Формируем итоговую команду
-CMD="docker-compose exec rag-cli python main.py test $EVAL_MODE --chunker=$CHUNKER --retriever=$RETRIEVER --index-mode=$INDEX_MODE $FORCE_INDEX --active-type=$ACTIVE_TYPE --memory-type=$MEMORY_TYPE $MEMORY_OFF_FLAG"
+CMD="docker-compose exec rag-cli python main.py test $EVAL_MODE --chunker=$CHUNKER --retriever=$RETRIEVER --index-mode=$INDEX_MODE $FORCE_INDEX --active-type=$ACTIVE_TYPE --memory-type=$MEMORY_TYPE $MEMORY_OFF_FLAG $HYDE_CLI"
 
 # Выполняем команду
 eval $CMD

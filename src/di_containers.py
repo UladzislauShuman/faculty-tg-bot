@@ -1,7 +1,7 @@
 from dependency_injector import containers, providers
 
 from src.retrievers.chroma_bm25 import create_chroma_bm25_retriever
-from src.retrievers.qdrant_retriever import create_qdrant_retriever # НОВЫЙ ИМПОРТ
+from src.retrievers.qdrant_retriever import create_qdrant_retriever
 from src.retrievers.rerankers import create_reranker
 
 # Импорты RAG пайплайна
@@ -13,10 +13,6 @@ from src.pipelines.rag.pipeline import (
   get_llm_from_config,
 )
 from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
-
-# Импорты Ретриверов и Реранкеров
-from src.retrievers.chroma_bm25 import create_chroma_bm25_retriever
-from src.retrievers.rerankers import create_reranker
 
 # Импорты Чанкеров
 from src.parsing_and_chunking.chunkers.semantic_html_chunker import \
@@ -33,6 +29,15 @@ from src.tg_bot.repositories.implementations import UserRepository, \
 from src.tg_bot.services.implementations import UserService, AnswerService, \
   SessionService
 from src.tg_bot.services.summarizer import SummarizerService
+
+
+def _hyde_llm_from_config(hyde_cfg: object):
+  if not isinstance(hyde_cfg, dict) or not hyde_cfg.get("enabled", False):
+    return None
+  llm_cfg = hyde_cfg.get("llm")
+  if not llm_cfg:
+    return None
+  return get_llm_from_config(dict(llm_cfg))
 
 
 class Container(containers.DeclarativeContainer):
@@ -61,10 +66,22 @@ class Container(containers.DeclarativeContainer):
                                           session_repo=bot_session_repo)
 
   # --- Retrieval Components ---
+  hyde_llm = providers.Callable(
+      _hyde_llm_from_config,
+      hyde_cfg=config.hyde,
+  )
+
   # 1. Провайдеры базовых ретриверов
-  chroma_bm25_retriever = providers.Factory(create_chroma_bm25_retriever,
-                                            config=config)
-  qdrant_retriever = providers.Factory(create_qdrant_retriever, config=config)
+  chroma_bm25_retriever = providers.Factory(
+      create_chroma_bm25_retriever,
+      config=config,
+      hyde_llm=hyde_llm,
+  )
+  qdrant_retriever = providers.Factory(
+      create_qdrant_retriever,
+      config=config,
+      hyde_llm=hyde_llm,
+  )
 
   # Динамический выбор ретривера на основе конфига
   base_retriever = providers.Selector(

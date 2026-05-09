@@ -1,5 +1,8 @@
 import os
 import pickle
+from typing import Optional
+
+from langchain_core.language_models import BaseLanguageModel
 from langchain_core.retrievers import BaseRetriever
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -7,9 +10,13 @@ from src.retrievers.async_ensemble_retriever import AsyncEnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 
 from .e5_query_embeddings import E5QueryEmbeddings
+from .hyde_retriever import HyDEQueryEmbeddings
 from src.util.text_processing import tokenize_for_bm25 # <-- ИМПОРТ НАШЕЙ УТИЛИТЫ
 
-def create_chroma_bm25_retriever(config: dict) -> BaseRetriever:
+def create_chroma_bm25_retriever(
+    config: dict,
+    hyde_llm: Optional[BaseLanguageModel] = None,
+) -> BaseRetriever:
     # --- 1. Инициализация векторного ретривера (ChromaDB) ---
     print("Инициализация векторного ретривера (ChromaDB)...")
     model_name = config['embedding_model']['name']
@@ -25,6 +32,17 @@ def create_chroma_bm25_retriever(config: dict) -> BaseRetriever:
         embeddings_for_query = E5QueryEmbeddings(base_embeddings)
     else:
         embeddings_for_query = base_embeddings
+
+    hyde_cfg = config.get("hyde") or {}
+    if hyde_llm is not None:
+        print("Включён HyDE для dense-поиска (Chroma в гибриде Chroma+BM25)...")
+        embeddings_for_query = HyDEQueryEmbeddings(
+            embeddings_for_query,
+            hyde_llm,
+            timeout_seconds=float(hyde_cfg.get("timeout_seconds", 8)),
+            num_hypotheses=int(hyde_cfg.get("num_hypotheses", 1)),
+            verbose_console=bool(hyde_cfg.get("verbose_console", False)),
+        )
 
     vector_store = Chroma(
         persist_directory=config['retrievers']['vector_store']['db_path'],

@@ -82,6 +82,19 @@ rag_pipeline:
   stage_timing_logs:
     enabled: true   # false — без [TIMING] в логах (как до Sprint 4)
 
+# 6.6 HyDE (Sprint 6: hypothetical document embeddings для dense-поиска)
+# Включение: hyde.enabled: true — по умолчанию та же Ollama-модель, что и генерация ответов (providers.*), без лишних pull.
+hyde:
+  enabled: true
+  llm:
+    type: "ollama"
+    model: "llama3.1"   # синхрон с providers.ollama.model при LLM_PROVIDER=ollama
+    temperature: 0.7
+  timeout_seconds: 1000    # под CPU можно увеличить; при частых таймаутах — tinyllama или false
+  num_hypotheses: 2     # >1 — усреднение эмбеддингов гипотез, рост latency
+  # true — строка INFO [HyDE] в консоли на каждый dense embed_query (+ HYDE_CONSOLE=1 в окружении)
+  verbose_console: false
+
 # 7. Пути к файлам
 paths:
   output_dir: "output"
@@ -115,6 +128,15 @@ evaluation_scenarios:
     force_index: true
     overrides: {}
 
+  # Тот же профиль что baseline_like_test_sh, но HyDE для dense-поиска (hyde.llm — как в секции hyde выше / обычно та же модель, что генерация)
+  - name: "chroma_bm25_hyde"
+    chunker: markdown
+    index_mode: test
+    force_index: true
+    overrides:
+      hyde:
+        enabled: true
+
   # Только Qdrant как backend; память как в базовом config.yaml
   - name: "qdrant"
     chunker: markdown
@@ -123,6 +145,17 @@ evaluation_scenarios:
     overrides:
       retrievers:
         active_type: qdrant
+
+  # Как chroma_bm25_hyde, но backends Qdrant hybrid (dense+sparse); HyDE только на dense
+  - name: "qdrant_hyde"
+    chunker: markdown
+    index_mode: test
+    force_index: true
+    overrides:
+      retrievers:
+        active_type: qdrant
+      hyde:
+        enabled: true
 
   # Qdrant + явный summary_window
   - name: "qdrant_summary_window"

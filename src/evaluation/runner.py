@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from src.evaluation.schemas import EvalScore
 from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
+from src.retrievers.hyde_trace_context import hyde_trace_begin, hyde_trace_end
 from src.util.yaml_parser import TestSetLoader
 
 
@@ -55,6 +56,44 @@ class TestPipelineRunner:
         relevance_evaluator
     )
 
+  def _hyde_trace_enabled_for_run(self) -> bool:
+    h = self.config.get("hyde")
+    return isinstance(h, dict) and bool(h.get("enabled"))
+
+  @staticmethod
+  def _format_hyde_trace_block(events: Optional[List[Dict[str, Any]]]) -> str:
+    if not events:
+      return ""
+    parts: List[str] = ["### 🔬 HyDE (dense-поиск)\n\n"]
+    for idx, evt in enumerate(events, 1):
+      st = evt.get("status", "?")
+      parts.append(f"#### Вызов dense `embed_query` #{idx}: `{st}`\n\n")
+      parts.append(
+          f"- **LLM время (слот гипотез):** `{evt.get('elapsed_hypothesis_llm_s')} s`\n"
+          f"- **num_hypotheses (config):** {evt.get('num_hypotheses_config')}\n"
+      )
+      prev = evt.get("user_query_preview") or ""
+      parts.append(f"- **Входящий текст (preview):**\n```\n{prev}\n```\n")
+      hp = evt.get("hypotheses") or []
+      if hp:
+        parts.append("- **Гипотетические фрагменты:**\n")
+        for hi, ht in enumerate(hp, 1):
+          esc = ht.replace("```", "``\\`") if ht else "(пусто)"
+          parts.append(f"  **{hi}.**\n```text\n{esc}\n```\n")
+      hits = evt.get("hypothesis_issues") or []
+      if hits:
+        parts.append(
+            "- **Примечания по слотам LLM:** "
+            + ", ".join(f"`{str(h)}`" for h in hits)
+            + "\n",
+        )
+      note = evt.get("embed_phase_note")
+      if note:
+        parts.append(f"- **Комментарий:** _{note}_\n")
+      parts.append("\n")
+    parts.append("")
+    return "".join(parts)
+
   @staticmethod
   def _sanitize_filename_token(value: str) -> str:
     s = str(value).replace(os.sep, "-")
@@ -86,8 +125,11 @@ class TestPipelineRunner:
     ts = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     parts = [
         eval_mode, chunker, retriever_strategy, index_mode, force_flag,
-        retriever_type, memory_type, ts,
+        retriever_type, memory_type,
     ]
+    if (self.config.get("hyde") or {}).get("enabled", False):
+      parts.append("hyde_on")
+    parts.append(ts)
     return "-".join(self._sanitize_filename_token(p) for p in parts)
 
   def _simple_ru_stem(self, word: str) -> str:
@@ -172,9 +214,13 @@ class TestPipelineRunner:
       hit: int,
       faithfulness: Optional[EvalScore] = None,
       relevance: Optional[EvalScore] = None,
+      hyde_trace: Optional[List[Dict[str, Any]]] = None,
   ) -> None:
     """Пишет лог в файл в реальном времени."""
     file_handle.write(f"## ❓ Вопрос {i}: {qa['question']}\n\n")
+    md_hyde = self._format_hyde_trace_block(hyde_trace)
+    if md_hyde:
+      file_handle.write(md_hyde + "\n")
     file_handle.write(f"### 🔎 Найденные документы (Top-{len(docs)})\n")
     for j, doc in enumerate(docs, 1):
       source = doc.metadata.get('source', 'N/A')
@@ -338,11 +384,19 @@ class TestPipelineRunner:
     try:
       with open(trace_path, trace_mode, encoding="utf-8") as trace_file:
         if trace_mode == "w":
+          _hyde = self.config.get("hyde") or {}
+          _hyde_ln = ""
+          if isinstance(_hyde, dict):
+            _hyde_ln = (
+                f"HyDE: enabled={_hyde.get('enabled', False)}, "
+                f"num_hypotheses={_hyde.get('num_hypotheses')}, "
+                f"verbose_console={_hyde.get('verbose_console', False)}\n"
+            )
           trace_file.write(
               f"# Trace Log\nLabel: `{output_stem}`\n"
               f"Chunker: {args.chunker} | Test mode: {test_mode} | "
               f"active_type: {self.config.get('retrievers', {}).get('active_type', 'na')} | "
-              f"memory: {self.config.get('memory') or {}}\n\n"
+              f"memory: {self.config.get('memory') or {}}\n{_hyde_ln}\n"
           )
         else:
           trace_file.write("\n\n## RESUME\n\n")
@@ -359,7 +413,15 @@ class TestPipelineRunner:
               interrupted = EvaluationPause("questions", i, 0, 0, None)
               break
             qa = qa_set[i]
-            docs = await retrieval_chain.ainvoke(qa["question"])
+            hy_snap: List[Dict[str, Any]] = []
+            hy_tok = None
+            if self._hyde_trace_enabled_for_run():
+              hy_tok = hyde_trace_begin()
+            try:
+              docs = await retrieval_chain.ainvoke(qa["question"])
+            finally:
+              if hy_tok is not None:
+                hy_snap = hyde_trace_end(hy_tok)
             hit = self._calculate_hit_rate(qa["answer"], docs)
             total_hit_rate += hit
 
@@ -405,6 +467,7 @@ class TestPipelineRunner:
                   hit,
                   faithfulness=faith_score,
                   relevance=rel_score,
+                  hyde_trace=hy_snap,
               )
 
               icon = "✅" if hit else "❌"
@@ -494,11 +557,19 @@ class TestPipelineRunner:
               display_step = step_idx + 1
               print(f"  Шаг {display_step}: {step['q'][:50]}...")
               start_time = time.time()
+              hy_snap_sc: List[Dict[str, Any]] = []
+              hy_tok_sc = None
+              if self._hyde_trace_enabled_for_run():
+                hy_tok_sc = hyde_trace_begin()
               try:
-                response = await rag_chain.ainvoke(
-                    {"input": step["q"]},
-                    config={"configurable": {"session_id": session_id}},
-                )
+                try:
+                  response = await rag_chain.ainvoke(
+                      {"input": step["q"]},
+                      config={"configurable": {"session_id": session_id}},
+                  )
+                finally:
+                  if hy_tok_sc is not None:
+                    hy_snap_sc = hyde_trace_end(hy_tok_sc)
                 latency = time.time() - start_time
                 bot_answer = response["answer"]
                 docs = response.get("context", [])
@@ -531,6 +602,7 @@ class TestPipelineRunner:
                     hit,
                     faithfulness=faith_score,
                     relevance=rel_score,
+                    hyde_trace=hy_snap_sc,
                 )
 
                 icon = "✅" if hit else "❌"

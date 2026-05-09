@@ -1,13 +1,20 @@
 import os
-from qdrant_client import QdrantClient
-from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
+from typing import Optional
+
+from langchain_core.language_models import BaseLanguageModel
 from langchain_core.retrievers import BaseRetriever
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
+from qdrant_client import QdrantClient
 
 from .e5_query_embeddings import E5QueryEmbeddings
+from .hyde_retriever import HyDEQueryEmbeddings
 
 
-def create_qdrant_retriever(config: dict) -> BaseRetriever:
+def create_qdrant_retriever(
+  config: dict,
+  hyde_llm: Optional[BaseLanguageModel] = None,
+) -> BaseRetriever:
   print("Инициализация Hybrid Qdrant ретривера (Dense + Sparse)...")
   qdrant_config = config['retrievers']['qdrant']
 
@@ -21,6 +28,17 @@ def create_qdrant_retriever(config: dict) -> BaseRetriever:
   )
   embeddings_for_query = E5QueryEmbeddings(
     base_embeddings) if "e5" in model_name else base_embeddings
+
+  hyde_cfg = config.get("hyde") or {}
+  if hyde_llm is not None:
+    print("Включён HyDE для dense-поиска (Qdrant hybrid)...")
+    embeddings_for_query = HyDEQueryEmbeddings(
+      embeddings_for_query,
+      hyde_llm,
+      timeout_seconds=float(hyde_cfg.get("timeout_seconds", 8)),
+      num_hypotheses=int(hyde_cfg.get("num_hypotheses", 1)),
+      verbose_console=bool(hyde_cfg.get("verbose_console", False)),
+    )
 
   # 2. Sparse Embeddings (BM25-like) через FastEmbed
   sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
