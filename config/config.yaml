@@ -86,6 +86,8 @@ paths:
   retriever: "retriever.txt" # Лог работы ретривера
   sitemap: "sitemap.txt"
   test_pages_source: "test_pages_source.html"
+  default_checkpoint_path: "check_points/default_checkpoint.json"
+  pause_flag: "output/pause.flag"
 
 # 8. Память диалога (Sprint 3: semantic / summary)
 memory:
@@ -98,3 +100,45 @@ memory:
     model: "llama3.1"
     temperature: 0.0
   summary_timeout_seconds: 90    # Суммаризация дольше ответа — больший таймаут
+
+# 9. Матрица прогона (main.py test-matrix)
+evaluation_scenarios:
+  # Совпадает с быстрым пунктом 1 в test.sh: markdown, test, chroma_bm25, summary из config, --force-index
+  - name: "baseline_like_test_sh"
+    chunker: markdown
+    index_mode: test
+    force_index: true
+    overrides: {}
+
+  # Только Qdrant как backend; память как в базовом config.yaml
+  - name: "qdrant"
+    chunker: markdown
+    index_mode: test
+    force_index: false
+    overrides:
+      retrievers:
+        active_type: qdrant
+
+  # Qdrant + явный summary_window
+  - name: "qdrant_summary_window"
+    chunker: markdown
+    index_mode: test
+    force_index: false
+    overrides:
+      retrievers:
+        active_type: qdrant
+      memory:
+        enabled: true
+        type: summary_window
+
+  # Qdrant + скользящее окно без LLM-суммаризации (контраст к qdrant_summary_window)
+  - name: "qdrant_memory_window"
+    chunker: markdown
+    index_mode: test
+    force_index: false
+    overrides:
+      retrievers:
+        active_type: qdrant
+      memory:
+        enabled: true
+        type: window

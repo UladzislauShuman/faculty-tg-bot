@@ -2,13 +2,28 @@ import os
 import re
 import sys
 import time
+import copy
+import signal
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.evaluation.schemas import EvalScore
 from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
 from src.util.yaml_parser import TestSetLoader
+
+
+@dataclass(frozen=True)
+class EvaluationPause:
+  """Точка остановки между вопросами (пауза / graceful shutdown)."""
+
+  phase: str  # "questions" | "dialogs"
+  block1_next_idx: int
+  dialog_scenario_idx: int
+  dialog_step_next_idx: int
+  dialog_session_id: Optional[str] = None
 
 
 class TestPipelineRunner:
@@ -56,6 +71,9 @@ class TestPipelineRunner:
         or self.config.get("evaluation_settings", {}).get("mode", "all")
     )
     chunker = getattr(args, "chunker", "markdown")
+    fixed = getattr(args, "fixed_output_stem", None)
+    if fixed:
+      return self._sanitize_filename_token(fixed)
     retriever_strategy = getattr(args, "retriever", "hybrid")
     index_mode = getattr(args, "index_mode", "test")
     force_flag = "force" if getattr(args, "force_index", False) else "noforce"
@@ -240,8 +258,41 @@ class TestPipelineRunner:
 
     print(f"\n📄 Отчет сохранен: {report_path}")
 
-  async def run(self, args):
-    # 1. Настройка Чанкера
+  async def run(
+      self,
+      args: Any,
+  ) -> Tuple[List[Dict[str, Any]], Optional[EvaluationPause]]:
+    paused_path = getattr(args, "pause_flag_path", None) or os.path.join(
+        self.output_dir, "pause.flag"
+    )
+
+    def _ensure_pause_parent() -> None:
+      pd = os.path.dirname(os.path.abspath(paused_path))
+      if pd:
+        os.makedirs(pd, exist_ok=True)
+
+    def _touch_pause_signal() -> None:
+      _ensure_pause_parent()
+      Path(paused_path).touch()
+
+    loop = asyncio.get_running_loop()
+    try:
+      loop.add_signal_handler(signal.SIGINT, _touch_pause_signal)
+      loop.add_signal_handler(signal.SIGTERM, _touch_pause_signal)
+    except (NotImplementedError, RuntimeError):
+      signal.signal(signal.SIGINT, lambda *_unused: _touch_pause_signal())
+
+    def _pause_requested() -> bool:
+      return os.path.isfile(paused_path)
+
+    interrupted: Optional[EvaluationPause] = None
+    results: List[Dict[str, Any]]
+    preload = getattr(args, "preloaded_results", None)
+    if preload is None:
+      results = []
+    else:
+      results = copy.deepcopy(preload)
+
     processor_name = f"{args.chunker}_processor"
     try:
       processor_provider = getattr(self.container, processor_name)
@@ -249,68 +300,72 @@ class TestPipelineRunner:
     except AttributeError:
       sys.exit(f"❌ Ошибка: Процессор '{processor_name}' не найден.")
 
-    # 2. Индексация
     if args.need_index:
       from src.pipelines.indexing.pipeline import run_indexing
       print(f"\n🏗️  Запуск индексации ({args.chunker})...")
       processor = self.container.data_processor()
       run_indexing(self.config, processor, mode=args.index_mode)
 
-    # 3. Подготовка
-    test_mode = self.config.get('evaluation_settings', {}).get('mode', 'all')
+    test_mode = self.config.get("evaluation_settings", {}).get("mode", "all")
     print(f"\n🧪 ЗАПУСК ТЕСТИРОВАНИЯ (Режим: {test_mode})...")
 
-    loader = TestSetLoader(self.config['paths']['qa_test_set'])
-
-    # Инициализируем цепочки
+    loader = TestSetLoader(self.config["paths"]["qa_test_set"])
     retrieval_chain = self.container.retrieval_chain()
     generation_chain = self.container.generation_chain()
     rag_chain = self.container.rag_chain()
 
-    # Подготовка тестового пользователя (ID=0) для соблюдения FK в БД
     TEST_USER_ID = 0
     await self.user_service.get_or_create_user(
         user_id=TEST_USER_ID,
         first_name="TestRunner",
-        username="test_bot"
+        username="test_bot",
     )
 
-    # Трассировка: имя trace/report с одинаковой меткой на прогон
     os.makedirs(self.output_dir, exist_ok=True)
     output_stem = self._output_label_stem(args)
     trace_path = os.path.join(self.output_dir, f"trace_{output_stem}.md")
     print(f"📝 Лог: {trace_path}")
 
-    results = []
-    total_hit_rate = 0
+    total_hit_rate = sum(int(r["hit"]) for r in results)
 
-    with open(trace_path, "w", encoding="utf-8") as trace_file:
-      trace_file.write(
-        f"# Trace Log\nLabel: `{output_stem}`\n"
-        f"Chunker: {args.chunker} | Test mode: {test_mode} | "
-        f"active_type: {self.config.get('retrievers', {}).get('active_type', 'na')} | "
-        f"memory: {self.config.get('memory') or {}}\n\n"
-      )
+    trace_mode = (
+        "a"
+        if getattr(args, "resume_continue_trace", False)
+        and os.path.isfile(trace_path)
+        else "w"
+    )
 
-      # =================================================================
-      # БЛОК 1: ОДИНОЧНЫЕ ВОПРОСЫ
-      # =================================================================
-      if test_mode in ['all', 'questions']:
-        qa_set = loader.get_qa_pairs()
-        if qa_set:
+    try:
+      with open(trace_path, trace_mode, encoding="utf-8") as trace_file:
+        if trace_mode == "w":
+          trace_file.write(
+              f"# Trace Log\nLabel: `{output_stem}`\n"
+              f"Chunker: {args.chunker} | Test mode: {test_mode} | "
+              f"active_type: {self.config.get('retrievers', {}).get('active_type', 'na')} | "
+              f"memory: {self.config.get('memory') or {}}\n\n"
+          )
+        else:
+          trace_file.write("\n\n## RESUME\n\n")
+
+        qa_set: List[Dict[str, Any]] = []
+        if test_mode in ("all", "questions"):
+          qa_set = loader.get_qa_pairs()
+        start_q = int(getattr(args, "start_question_idx", 0) or 0)
+
+        if test_mode in ("all", "questions") and qa_set:
           print(f"\n🔎 [БЛОК 1] Одиночные вопросы ({len(qa_set)} шт)...")
-          retrieval_tasks = [retrieval_chain.ainvoke(qa['question']) for qa in
-                             qa_set]
-          retrieved_docs_batch = await asyncio.gather(*retrieval_tasks)
-
-          for i, (qa, docs) in enumerate(zip(qa_set, retrieved_docs_batch)):
-            hit = self._calculate_hit_rate(qa['answer'], docs)
+          for i in range(start_q, len(qa_set)):
+            if _pause_requested():
+              interrupted = EvaluationPause("questions", i, 0, 0, None)
+              break
+            qa = qa_set[i]
+            docs = await retrieval_chain.ainvoke(qa["question"])
+            hit = self._calculate_hit_rate(qa["answer"], docs)
             total_hit_rate += hit
 
             print(f"[{i + 1}/{len(qa_set)}] {qa['question'][:50]}...")
 
-            # Обрезка контекста
-            safe_docs = []
+            safe_docs: List[Any] = []
             current_chars = 0
             for d in docs:
               doc_len = len(d.page_content)
@@ -321,17 +376,21 @@ class TestPipelineRunner:
                 break
 
             full_context = "\n\n".join(
-                [f"Источник: {d.metadata.get('source')}\n{d.page_content}" for d
-                 in safe_docs])
+                [
+                    f"Источник: {d.metadata.get('source')}\n{d.page_content}"
+                    for d in safe_docs
+                ]
+            )
 
             start_time = time.time()
             try:
               response = await generation_chain.ainvoke(
-                  {"context": full_context, "question": qa['question']})
+                  {"context": full_context, "question": qa["question"]}
+              )
               latency = time.time() - start_time
 
               faith_score, rel_score = await self._aevaluate_judge_scores(
-                  qa['question'], response, full_context
+                  qa["question"], response, full_context
               )
               score = self._aggregate_judge_score(faith_score, rel_score)
 
@@ -354,62 +413,116 @@ class TestPipelineRunner:
               )
 
               results.append({
-                "q": qa['question'], "a": response, "ref": qa['answer'],
-                "score": score, "latency": latency, "hit": hit,
-                "faithfulness": faith_score.score if faith_score else None,
-                "relevance": rel_score.score if rel_score else None,
+                  "q": qa["question"],
+                  "a": response,
+                  "ref": qa["answer"],
+                  "score": score,
+                  "latency": latency,
+                  "hit": hit,
+                  "faithfulness": faith_score.score if faith_score else None,
+                  "relevance": rel_score.score if rel_score else None,
               })
             except Exception as e:
               print(f"   -> ❌ Error: {e}")
               trace_file.write(f"## Error: {e}\n")
 
-      # =================================================================
-      # БЛОК 2: МНОГОШАГОВЫЕ СЦЕНАРИИ (ДИАЛОГИ)
-      # =================================================================
-      if test_mode in ['all', 'scenarios']:
-        scenarios = loader.get_test_scenarios()
-        if scenarios:
-          print(f"\n🎬 [БЛОК 2] Многошаговые сценарии ({len(scenarios)} шт)...")
-          for sc in scenarios:
-            # Создаем реальную сессию в БД для этого сценария
-            session_id = await self.session_service.start_new_session(
-              user_id=TEST_USER_ID)
+            if _pause_requested():
+              interrupted = EvaluationPause(
+                  "questions",
+                  i + 1,
+                  0,
+                  0,
+                  None,
+              )
+              break
 
-            trace_file.write(
-              f"## 🎬 Сценарий: {sc['name']} (Session: {session_id})\n\n")
-            print(f"\n--- Сценарий: {sc['name']} ---")
+        resume_sc = int(getattr(args, "resume_dialog_sc_idx", 0) or 0)
+        resume_step = int(getattr(args, "resume_dialog_step_idx", 0) or 0)
+        resume_sid_obj = getattr(args, "resume_dialog_session_id", None)
+        resume_sid: Optional[str] = (
+            str(resume_sid_obj) if resume_sid_obj is not None else None
+        )
 
-            for step_idx, step in enumerate(sc['steps'], 1):
-              print(f"  Шаг {step_idx}: {step['q'][:50]}...")
+        scenarios: List[Dict[str, Any]] = []
+        if test_mode in ("all", "scenarios"):
+          scenarios = loader.get_test_scenarios()
+
+        if interrupted is None and scenarios:
+          print(
+              f"\n🎬 [БЛОК 2] Многошаговые сценарии ({len(scenarios)} шт)..."
+          )
+          n_qa = len(qa_set)
+          for sc_idx, sc in enumerate(scenarios):
+            if interrupted:
+              break
+            if sc_idx < resume_sc:
+              continue
+
+            steps = sc["steps"]
+            session_id: str
+            if sc_idx == resume_sc and resume_sid is not None:
+              session_id = resume_sid
+            else:
+              session_id = await self.session_service.start_new_session(
+                  user_id=TEST_USER_ID
+              )
+
+            header_written = False
+            for step_idx, step in enumerate(steps):
+              if interrupted:
+                break
+              if sc_idx == resume_sc and step_idx < resume_step:
+                continue
+
+              if _pause_requested():
+                interrupted = EvaluationPause(
+                    "dialogs",
+                    n_qa,
+                    sc_idx,
+                    step_idx,
+                    session_id,
+                )
+                break
+
+              if not header_written:
+                trace_file.write(
+                    f"## 🎬 Сценарий: {sc['name']} (Session: {session_id})\n\n"
+                )
+                print(f"\n--- Сценарий: {sc['name']} ---")
+                header_written = True
+
+              display_step = step_idx + 1
+              print(f"  Шаг {display_step}: {step['q'][:50]}...")
               start_time = time.time()
               try:
-                # 1. Вызываем умную RAG-цепочку
                 response = await rag_chain.ainvoke(
-                    {"input": step['q']},
-                    config={"configurable": {"session_id": session_id}}
+                    {"input": step["q"]},
+                    config={"configurable": {"session_id": session_id}},
                 )
                 latency = time.time() - start_time
-                bot_answer = response['answer']
-                docs = response.get('context', [])
+                bot_answer = response["answer"]
+                docs = response.get("context", [])
 
-                # 2. Сохраняем в БД (теперь ID сессии валидный)
-                await self.answer_service.save_answer(session_id, step['q'],
-                                                      bot_answer)
+                await self.answer_service.save_answer(
+                    session_id,
+                    step["q"],
+                    bot_answer,
+                )
 
-                # 3. Считаем метрики
-                hit = self._calculate_hit_rate(step['a'], docs)
+                hit = self._calculate_hit_rate(step["a"], docs)
                 total_hit_rate += hit
                 full_context = self._build_full_context_from_docs(docs)
                 faith_score, rel_score = await self._aevaluate_judge_scores(
-                    step['q'], bot_answer, full_context
+                    step["q"],
+                    bot_answer,
+                    full_context,
                 )
                 score = self._aggregate_judge_score(faith_score, rel_score)
 
-                # 4. Логируем
-                step_qa = {"question": step['q'], "answer": step['a']}
+                step_qa = {"question": step["q"], "answer": step["a"]}
                 self._append_to_trace(
                     trace_file,
-                    f"[{sc['name']}] Шаг {step_idx}",
+                    f"[{sc['name']}] Шаг {display_step}",
                     step_qa,
                     docs,
                     bot_answer,
@@ -422,28 +535,55 @@ class TestPipelineRunner:
 
                 icon = "✅" if hit else "❌"
                 print(
-                    f"     -> {icon} Hit | Score: {score:.2f} | {latency:.1f}s"
+                    f"     -> {icon} Hit | Score: {score:.2f} | "
+                    f"{latency:.1f}s"
                 )
 
                 results.append({
-                  "q": f"[{sc['name']}] {step['q']}", "a": bot_answer,
-                  "ref": step['a'],
-                  "score": score, "latency": latency, "hit": hit,
-                  "faithfulness": faith_score.score if faith_score else None,
-                  "relevance": rel_score.score if rel_score else None,
+                    "q": f"[{sc['name']}] {step['q']}",
+                    "a": bot_answer,
+                    "ref": step["a"],
+                    "score": score,
+                    "latency": latency,
+                    "hit": hit,
+                    "faithfulness": (
+                        faith_score.score if faith_score else None
+                    ),
+                    "relevance": rel_score.score if rel_score else None,
                 })
               except Exception as e:
                 print(f"     -> ❌ Error: {e}")
-                trace_file.write(f"## Error on step {step_idx}: {e}\n")
+                trace_file.write(
+                    f"## Error on step {display_step}: {e}\n"
+                )
 
-    # =================================================================
-    # ИТОГИ
-    # =================================================================
-    if results:
+              if _pause_requested():
+                nxt = step_idx + 1
+                if nxt < len(steps):
+                  ns, nt, sid_store = sc_idx, nxt, session_id
+                else:
+                  ns, nt, sid_store = sc_idx + 1, 0, None
+                interrupted = EvaluationPause(
+                    "dialogs",
+                    n_qa,
+                    ns,
+                    nt,
+                    sid_store,
+                )
+                break
+
+    finally:
+      try:
+        loop.remove_signal_handler(signal.SIGINT)
+        loop.remove_signal_handler(signal.SIGTERM)
+      except (NotImplementedError, RuntimeError, ValueError):
+        pass
+
+    if results and interrupted is None:
       avg_metrics = {
-        "sim": sum(r['score'] for r in results) / len(results),
-        "lat": sum(r['latency'] for r in results) / len(results),
-        "hit": total_hit_rate / len(results)
+          "sim": sum(r["score"] for r in results) / len(results),
+          "lat": sum(r["latency"] for r in results) / len(results),
+          "hit": total_hit_rate / len(results),
       }
       print("\n" + "=" * 60)
       print(f"📊 ИТОГИ ({args.chunker} | Режим: {test_mode})")
@@ -453,16 +593,22 @@ class TestPipelineRunner:
       rows_f = [r for r in results if r.get("faithfulness") is not None]
       rows_r = [r for r in results if r.get("relevance") is not None]
       if rows_f:
+        avg_faith = sum(r["faithfulness"] for r in rows_f) / len(rows_f)
         print(
-            f"✅ Avg Faithfulness: {sum(r['faithfulness'] for r in rows_f) / len(rows_f):.4f} "
+            f"✅ Avg Faithfulness: {avg_faith:.4f} "
             f"(n={len(rows_f)})"
         )
       if rows_r:
+        avg_rel = sum(r["relevance"] for r in rows_r) / len(rows_r)
         print(
-            f"✅ Avg Relevance: {sum(r['relevance'] for r in rows_r) / len(rows_r):.4f} "
+            f"✅ Avg Relevance: {avg_rel:.4f} "
             f"(n={len(rows_r)})"
         )
       self._save_final_report(results, args, avg_metrics, output_stem)
-    else:
+    elif not results:
       print(
-        "\n⚠️ Нет результатов для отображения (проверьте qa-test-set.yaml и режим тестирования).")
+          "\n⚠️ Нет результатов для отображения "
+          "(проверьте qa-test-set.yaml и режим тестирования)."
+      )
+
+    return results, interrupted

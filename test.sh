@@ -73,15 +73,30 @@ echo -e "${CYAN}Выберите способ запуска тестов:${NC}"
 echo -e "  ${GREEN}1)${NC} Быстрый запуск (Дефолтный сценарий Владислава)"
 echo -e "     ${YELLOW}[all, markdown, hybrid, test, force-index, chroma_bm25, summary_window]${NC}"
 echo -e "  ${GREEN}2)${NC} Интерактивная настройка (Выбрать каждый параметр вручную)"
-echo -e "  ${GREEN}3)${NC} Выход"
-read -p "Ваш выбор [1-3]: " MENU_CHOICE
+echo -e "  ${GREEN}3)${NC} Матрица сценариев из config.yaml (python main.py test-matrix)"
+echo -e "  ${GREEN}4)${NC} Продолжить матрицу после паузы (python main.py test-matrix --resume)"
+echo -e "  ${GREEN}5)${NC} Выход"
+read -p "Ваш выбор [1-5]: " MENU_CHOICE
 
-if [ "$MENU_CHOICE" == "3" ]; then
+if [ "$MENU_CHOICE" == "5" ]; then
     echo "Выход."
     exit 0
 fi
 
-# --- Шаг 3: Сбор параметров ---
+if [ "$MENU_CHOICE" == "3" ]; then
+    echo -e "\n${YELLOW}Запуск матрицы evaluation_scenarios (test-matrix)...${NC}"
+    docker-compose exec rag-cli python main.py test-matrix
+    echo -e "\n${GREEN}✅ Готово. Чекпоинт: check_points/default_checkpoint.json${NC}"
+    exit 0
+fi
+
+if [ "$MENU_CHOICE" == "4" ]; then
+    echo -e "\n${YELLOW}Продолжение матрицы (--resume)...${NC}"
+    docker-compose exec rag-cli python main.py test-matrix --resume
+    echo -e "\n${GREEN}✅ Готово.${NC}"
+    exit 0
+fi
+
 if [ "$MENU_CHOICE" == "1" ]; then
     # Дефолтные настройки
     EVAL_MODE="all"

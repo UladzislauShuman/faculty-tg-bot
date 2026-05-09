@@ -97,6 +97,14 @@ def main():
                           help="Режим тестирования")
   ans_parser.add_argument("-q", "--query")
 
+  # TEST-MATRIX (YAML evaluation_scenarios + check_points/default_checkpoint.json)
+  tm_parser = subparsers.add_parser("test-matrix")
+  tm_parser.add_argument(
+      "--resume",
+      action="store_true",
+      help="Продолжить с check_points/default_checkpoint.json",
+  )
+
   args = parser.parse_args()
 
   try:
@@ -135,6 +143,11 @@ def main():
 
     args.need_index = manage_db_state_for_test(config, args.force_index)
 
+  if args.command == "test-matrix":
+    from src.evaluation.matrix_runner import run_matrix
+    asyncio.run(run_matrix(config, args))
+    return
+
   container = Container()
   container.config.from_dict(config)
 
@@ -151,7 +164,10 @@ def main():
             container.relevance_evaluator() if use_judge else None
         ),
     )
-    asyncio.run(runner.run(args))
+    async def _run_single_test():
+      _ignored_r, _ignored_p = await runner.run(args)
+
+    asyncio.run(_run_single_test())
 
   elif args.command == "index":
     print(f"🚀 Запуск ПРОДАКШН индексации (Chunker: {args.chunker})...")
