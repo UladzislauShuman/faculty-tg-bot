@@ -80,7 +80,8 @@ class Container(containers.DeclarativeContainer):
   final_retriever = providers.Factory(
       create_final_retriever,
       base_retriever=base_retriever,
-      reranker=reranker
+      reranker=reranker,
+      config=config,
   )
 
   # --- RAG Chains ---

@@ -3,7 +3,7 @@ import pickle
 from langchain_core.retrievers import BaseRetriever
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain.retrievers import EnsembleRetriever
+from src.retrievers.async_ensemble_retriever import AsyncEnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 
 from .e5_query_embeddings import E5QueryEmbeddings
@@ -56,7 +56,7 @@ def create_chroma_bm25_retriever(config: dict) -> BaseRetriever:
     vector_weight = weights_config.get('vector', 0.7)
     keyword_weight = weights_config.get('keyword', 0.3)
 
-    ensemble_retriever = EnsembleRetriever(
+    ensemble_retriever = AsyncEnsembleRetriever(
         retrievers=[chroma_retriever, bm25_retriever],
         weights=[vector_weight, keyword_weight]
     )

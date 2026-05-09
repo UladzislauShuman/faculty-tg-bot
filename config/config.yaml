@@ -77,6 +77,11 @@ providers:
 evaluation_settings:
   mode: "all" # Варианты: all (всё), questions (только одиночные), scenarios (только диалоги)
 
+# 6.5 RAG pipeline (Sprint 4: latency instrumentation)
+rag_pipeline:
+  stage_timing_logs:
+    enabled: true   # false — без [TIMING] в логах (как до Sprint 4)
+
 # 7. Пути к файлам
 paths:
   output_dir: "output"

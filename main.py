@@ -1,9 +1,11 @@
 import argparse
-import yaml
-import sys
+import asyncio
+import logging
 import os
 import shutil
-import asyncio
+import sys
+
+import yaml
 from dotenv import load_dotenv
 
 from src.di_containers import Container
@@ -43,6 +45,20 @@ def manage_db_state_for_test(config_data: dict, force_reindex: bool):
 
 def main():
   load_dotenv()
+  # Sprint 4+: [TIMING] в src.pipelines.rag.* идёт через logging.INFO
+  logging.basicConfig(
+      level=logging.WARNING,
+      format="%(levelname)s %(name)s %(message)s",
+  )
+  log_timing = os.environ.get("RAG_TIMING_LOGS", "1").lower() not in (
+      "0", "false", "no",
+  )
+  if log_timing:
+    for _name in (
+        "src.pipelines.rag.pipeline",
+        "src.pipelines.rag.timed_wrappers",
+    ):
+      logging.getLogger(_name).setLevel(logging.INFO)
   parser = argparse.ArgumentParser()
   subparsers = parser.add_subparsers(dest="command")
 
