@@ -132,7 +132,8 @@ else
     echo "   Определяет, как HTML-страницы нарезаются на куски текста."
     echo "   - markdown : Конвертация в Markdown и нарезка по заголовкам (Надежно)."
     echo "   - semantic : Умный парсинг таблиц и списков (Экспериментально)."
-    read -p "   Выберите чанкер[markdown/semantic/unstructured] (По умолчанию: markdown): " CHUNKER
+    echo "   - parent   : Small-to-Big Retrieval (Мелкие чанки для поиска, большие для контекста LLM)."
+    read -p "   Выберите чанкер[markdown/semantic/unstructured/parent] (По умолчанию: markdown): " CHUNKER
     CHUNKER=${CHUNKER:-markdown}
 
     # 3. RETRIEVER

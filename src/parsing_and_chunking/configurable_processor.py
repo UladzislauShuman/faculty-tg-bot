@@ -18,6 +18,10 @@ class ConfigurableProcessor(DataSourceProcessor):
       f"⚙️ ConfigurableProcessor инициализирован с чанкером: {chunker.__class__.__name__}")
 
   def process(self, source: str) -> List[Document]:
+    chunks, _ = self.process_with_parents(source)
+    return chunks
+
+  def process_with_parents(self, source: str) -> tuple[List[Document], List[Document]]:
     print(f"⚙️ Обработка {source} с помощью ConfigurableProcessor...")
     try:
       # 1. Скачиваем HTML
@@ -32,12 +36,16 @@ class ConfigurableProcessor(DataSourceProcessor):
       )
 
       # 3. Делегируем нарезку чанкеру
-      chunks = self.chunker.chunk(full_document)
+      if hasattr(self.chunker, "chunk_with_parents"):
+        children, parents = self.chunker.chunk_with_parents(full_document)
+      else:
+        children = self.chunker.chunk(full_document)
+        parents = []
 
       print(
-        f"  - ✅ Чанкер {self.chunker.__class__.__name__} создал {len(chunks)} чанков.")
-      return chunks
+        f"  - ✅ Чанкер {self.chunker.__class__.__name__} создал {len(children)} чанков (и {len(parents)} родителей).")
+      return children, parents
 
     except Exception as e:
       print(f"  - ❌ Ошибка при обработке {source}: {e}")
-      return []
+      return [], []

@@ -22,6 +22,8 @@ from src.parsing_and_chunking.unstructured_processor import \
   UnstructuredProcessor
 from src.parsing_and_chunking.configurable_processor import \
   ConfigurableProcessor
+from src.parsing_and_chunking.chunkers.parent_child_chunker import ParentChildHTMLChunker
+from src.retrievers.parent_document_retriever import ParentDocumentRetriever
 
 # Импорты Бота
 from src.tg_bot.repositories.implementations import UserRepository, \
@@ -40,6 +42,15 @@ def _hyde_llm_from_config(hyde_cfg: object):
   return get_llm_from_config(dict(llm_cfg))
 
 
+def _wrap_with_parent_retriever(base_retriever, parent_cfg):
+  if not isinstance(parent_cfg, dict) or not parent_cfg.get("enabled", False):
+    return base_retriever
+  docstore_path = parent_cfg.get("docstore_path", "data/parent_docstore.pkl")
+  return ParentDocumentRetriever.from_config(
+      base_retriever=base_retriever,
+      docstore_path=docstore_path
+  )
+
 class Container(containers.DeclarativeContainer):
   config = providers.Configuration()
 
@@ -51,6 +62,13 @@ class Container(containers.DeclarativeContainer):
   unstructured_processor = providers.Factory(UnstructuredProcessor)
   semantic_processor = providers.Factory(ConfigurableProcessor,
                                          chunker=semantic_chunker)
+  
+  parent_chunker = providers.Factory(
+      ParentChildHTMLChunker,
+      child_chunk_size=config.parent_document.child_chunk_size,
+      parent_chunk_size=config.parent_document.parent_chunk_size
+  )
+  parent_processor = providers.Factory(ConfigurableProcessor, chunker=parent_chunker)
 
   # Default (для обратной совместимости)
   data_processor = providers.Factory(markdown_processor)
@@ -84,10 +102,16 @@ class Container(containers.DeclarativeContainer):
   )
 
   # Динамический выбор ретривера на основе конфига
-  base_retriever = providers.Selector(
+  raw_base_retriever = providers.Selector(
       config.retrievers.active_type,
       chroma_bm25=chroma_bm25_retriever,
       qdrant=qdrant_retriever
+  )
+  
+  base_retriever = providers.Callable(
+      _wrap_with_parent_retriever,
+      base_retriever=raw_base_retriever,
+      parent_cfg=config.parent_document
   )
 
   # 2. Провайдер реранкера (вернет объект или None)

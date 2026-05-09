@@ -152,16 +152,39 @@ def run_indexing(config: dict, processor: DataSourceProcessor, mode: str):
 
   # 2. Сбор и чанкинг контента
   all_chunks = []
+  all_parents = []
   for url in urls_to_process:
-    chunks_from_url = processor.process(url)
-    all_chunks.extend(chunks_from_url)
+    if hasattr(processor, "process_with_parents"):
+      chunks_from_url, parents_from_url = processor.process_with_parents(url)
+      all_chunks.extend(chunks_from_url)
+      all_parents.extend(parents_from_url)
+    else:
+      chunks_from_url = processor.process(url)
+      all_chunks.extend(chunks_from_url)
 
   if not all_chunks:
     print("⚠️ Нет чанков для индексации. Процесс остановлен.")
     return
 
   print(
-    f"\n✅ Обработка источников завершена. Получено {len(all_chunks)} чанков.")
+    f"\n✅ Обработка источников завершена. Получено {len(all_chunks)} чанков (и {len(all_parents)} родителей).")
+
+  # 2.5 Сохранение родителей (если включен Parent Document Retrieval)
+  parent_config = config.get('parent_document', {})
+  if parent_config.get('enabled', False) and all_parents:
+    docstore_path = parent_config.get('docstore_path', 'data/parent_docstore.pkl')
+    os.makedirs(os.path.dirname(docstore_path), exist_ok=True)
+    
+    # Преобразуем список в словарь {doc_id: Document}
+    docstore = {}
+    for parent in all_parents:
+      doc_id = parent.metadata.get('doc_id')
+      if doc_id:
+        docstore[doc_id] = parent
+        
+    with open(docstore_path, "wb") as f:
+      pickle.dump(docstore, f)
+    print(f"✅ Сохранено {len(docstore)} родительских документов в {docstore_path}")
 
   # 3. Генерация уникальных ID (для дедупликации и отслеживания)
   print("Генерация уникальных ID для каждого чанка...")

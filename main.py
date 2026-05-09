@@ -7,7 +7,7 @@ import sys
 
 import yaml
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, Set
 
 from src.di_containers import Container
 from src.pipelines.indexing.pipeline import run_indexing
@@ -50,6 +50,32 @@ def _apply_hyde_cli_override(config_data: dict, hyde_choice: Optional[str]) -> N
   hyde_section["enabled"] = hyde_choice == "on"
 
 
+_INDEX_CHUNKER_CHOICES: Set[str] = {
+    "markdown", "semantic", "unstructured", "parent",
+}
+
+
+def _resolve_index_chunker(
+    config_data: dict, cli_chunker: Optional[str]
+) -> str:
+  """Источник: CLI --chunker, иначе indexing.chunker из yaml, иначе markdown."""
+  cfg_block = config_data.get("indexing")
+  cfg_chunker = None
+  if isinstance(cfg_block, dict):
+    cfg_chunker = cfg_block.get("chunker")
+  effective = (cli_chunker or cfg_chunker or "markdown")
+  if not isinstance(effective, str):
+    sys.exit(
+        f"indexing.chunker must be a string, got: {type(effective).__name__}"
+    )
+  if effective not in _INDEX_CHUNKER_CHOICES:
+    sys.exit(
+        f"indexing.chunker / --chunker must be one of "
+        f"{sorted(_INDEX_CHUNKER_CHOICES)}, got: {effective!r}"
+    )
+  return effective
+
+
 # --- MAIN CLI ---
 
 def main():
@@ -77,7 +103,7 @@ def main():
                            choices=["all", "questions", "scenarios"],
                            help="Режим тестирования")
   test_parser.add_argument("--chunker", type=str, default="markdown",
-                           choices=["markdown", "semantic", "unstructured"])
+                           choices=["markdown", "semantic", "unstructured", "parent"])
   test_parser.add_argument("--retriever", type=str, default="hybrid")
   test_parser.add_argument("--index-mode", type=str, default="test",
                            choices=["test", "full"])
@@ -119,8 +145,13 @@ def main():
   idx_parser = subparsers.add_parser("index")
   idx_parser.add_argument("mode", nargs="?", default="full",
                           choices=["full", "test"])
-  idx_parser.add_argument("--chunker", type=str, default="markdown",
-                          choices=["markdown", "semantic", "unstructured"])
+  idx_parser.add_argument(
+      "--chunker",
+      type=str,
+      default=None,
+      choices=["markdown", "semantic", "unstructured", "parent"],
+      help="Переопределить indexing.chunker из config.yaml; без флага — из yaml.",
+  )
 
   # RETRIEVE
   ret_parser = subparsers.add_parser("retrieve")
@@ -230,7 +261,8 @@ def main():
     asyncio.run(_run_single_test())
 
   elif args.command == "index":
-    print(f"🚀 Запуск ПРОДАКШН индексации (Chunker: {args.chunker})...")
+    index_chunker = _resolve_index_chunker(config, args.chunker)
+    print(f"🚀 Запуск ПРОДАКШН индексации (Chunker: {index_chunker})...")
 
     # Извлекаем настройки из конфига
     prod_db_path = config['retrievers']['vector_store']['db_path']
@@ -241,6 +273,18 @@ def main():
 
     # Безопасная очистка локальных индексов
     try:
+      parent_cfg = config.get("parent_document") or {}
+      if not (
+          isinstance(parent_cfg, dict) and parent_cfg.get("enabled", False)
+      ):
+        docstore_path = (
+            parent_cfg.get("docstore_path", "data/parent_docstore.pkl")
+            if isinstance(parent_cfg, dict)
+            else "data/parent_docstore.pkl"
+        )
+        if os.path.isfile(docstore_path):
+          print(f"🧹 Удаление устаревшего parent docstore: {docstore_path}")
+          os.remove(docstore_path)
       if os.path.exists(prod_db_path):
         print(f"🧹 Удаление старой папки Chroma: {prod_db_path}")
         shutil.rmtree(prod_db_path)
@@ -254,10 +298,10 @@ def main():
         f"❌ Ошибка при очистке локальных файлов: {e}\nУбедитесь, что файлы не заняты другим процессом.")
     # Инициализация процессора через DI
     try:
-      processor_provider = getattr(container, f"{args.chunker}_processor")
+      processor_provider = getattr(container, f"{index_chunker}_processor")
       container.data_processor.override(processor_provider)
     except AttributeError:
-      sys.exit(f"❌ Ошибка: Чанкер '{args.chunker}' не найден в DI-контейнере.")
+      sys.exit(f"❌ Ошибка: Чанкер '{index_chunker}' не найден в DI-контейнере.")
     processor = container.data_processor()
     # Запуск универсального пайплайна индексации
     run_indexing(config, processor, args.mode)

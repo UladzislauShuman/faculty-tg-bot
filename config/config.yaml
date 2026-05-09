@@ -32,7 +32,7 @@ evaluation_metrics:
 
 # 4. Настройки Поиска (Retrieval)
 retrievers:
-  active_type: "chroma_bm25" # Варианты: chroma_bm25, qdrant
+  active_type: "qdrant" # Варианты: chroma_bm25, qdrant
 
   # --- Qdrant ---
   qdrant:
@@ -85,7 +85,7 @@ rag_pipeline:
 # 6.6 HyDE (Sprint 6: hypothetical document embeddings для dense-поиска)
 # Включение: hyde.enabled: true — по умолчанию та же Ollama-модель, что и генерация ответов (providers.*), без лишних pull.
 hyde:
-  enabled: true
+  enabled: false
   llm:
     type: "ollama"
     model: "llama3.1"   # синхрон с providers.ollama.model при LLM_PROVIDER=ollama
@@ -94,6 +94,16 @@ hyde:
   num_hypotheses: 2     # >1 — усреднение эмбеддингов гипотез, рост latency
   # true — строка INFO [HyDE] в консоли на каждый dense embed_query (+ HYDE_CONSOLE=1 в окружении)
   verbose_console: false
+
+# 6.7 Индексация (main.py index): чанкер по умолчанию; CLI --chunker при указании перебивает yaml.
+indexing:
+  chunker: parent # markdown | semantic | unstructured | parent
+
+parent_document:
+  enabled: true
+  child_chunk_size: 300
+  parent_chunk_size: 1200
+  docstore_path: "data/parent_docstore.pkl"
 
 # 7. Пути к файлам
 paths:
