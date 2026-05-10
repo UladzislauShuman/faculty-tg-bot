@@ -24,6 +24,7 @@ from src.parsing_and_chunking.configurable_processor import \
   ConfigurableProcessor
 from src.parsing_and_chunking.chunkers.parent_child_chunker import ParentChildHTMLChunker
 from src.retrievers.parent_document_retriever import ParentDocumentRetriever
+from src.pipelines.routing.router import create_semantic_routing_service
 
 # Импорты Бота
 from src.tg_bot.repositories.implementations import UserRepository, \
@@ -155,6 +156,11 @@ class Container(containers.DeclarativeContainer):
     answer_repo=bot_answer_repo,
     session_repo=bot_session_repo,
     summarizer=summarizer_service,
+  )
+
+  semantic_routing_service = providers.Factory(
+      create_semantic_routing_service,
+      config=config,
   )
 
   # --- Evaluation (LLM-as-a-Judge) ---

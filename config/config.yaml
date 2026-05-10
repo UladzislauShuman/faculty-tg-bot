@@ -105,6 +105,19 @@ parent_document:
   parent_chunk_size: 1200
   docstore_path: "data/parent_docstore.pkl"
 
+# 6.8 Семантический роутинг в Telegram-боте (Sprint 8)
+# enabled: false — все пользовательские сообщения идут в RAG (как до спринта).
+semantic_routing:
+  enabled: true
+  method: llm # regex | llm (llm — дополнительный вызов модели, см. semantic_routing.llm)
+  timeout_seconds: 100 # только для method: llm (asyncio.wait_for)
+  smalltalk_reply: "Здравствуйте! Я бот ФПМИ БГУ. Задайте вопрос о факультете — отвечу по официальным материалам из базы знаний."
+  direct_link_reply: "Официальный сайт факультета: https://fpmi.bsu.by\nАктуальное расписание и объявления — в разделах сайта («Расписание», «Новости»)."
+  llm:
+    type: ollama
+    model: llama3.1
+    temperature: 0.0
+
 # 7. Пути к файлам
 paths:
   output_dir: "output"

@@ -5,6 +5,7 @@ from langchain_core.runnables import Runnable
 
 from src.util.callbacks import ProfilingCallbackHandler
 from src.tg_bot.services.interfaces import IUserService, IAnswerService, ISessionService
+from src.pipelines.routing import SemanticRoutingPort
 
 common_router = Router()
 
@@ -37,7 +38,8 @@ async def question_handler(
     user_service: IUserService,
     answer_service: IAnswerService,
     session_service: ISessionService,
-    rag_chain: Runnable
+    rag_chain: Runnable,
+    semantic_routing_service: SemanticRoutingPort,
 ):
     # Убедимся, что пользователь есть в базе
     await user_service.get_or_create_user(
@@ -51,6 +53,19 @@ async def question_handler(
 
     # Отправляем "печатает..."
     await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    decision = await semantic_routing_service.route(message.text or "")
+    if not decision.use_rag:
+      bot_answer = (decision.answer or "").strip() or (
+          "Задайте вопрос о факультете — я отвечу по базе знаний."
+      )
+      await message.answer(bot_answer)
+      await answer_service.save_answer(
+          session_id=session_id,
+          question=message.text,
+          bot_answer=bot_answer,
+      )
+      return
 
     # Получаем ответ от RAG-цепочки (она уже инициализирована с конфигом)
     # invoke блокирующий, но aiogram запускает хендлеры в тредах, так что для MVP ок.
