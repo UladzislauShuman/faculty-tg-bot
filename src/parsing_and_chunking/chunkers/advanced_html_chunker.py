@@ -1,7 +1,14 @@
+"""HTML: pre-clean, группировка под заголовками, обогащение metadata heading."""
+
+import logging
 from typing import List
+
 from bs4 import BeautifulSoup, Tag
 from langchain_core.documents import Document
+
 from src.interfaces.chunker_interfaces import ChunkerInterface
+
+logger = logging.getLogger(__name__)
 
 
 class AdvancedHTMLChunker(ChunkerInterface):
@@ -42,6 +49,10 @@ class AdvancedHTMLChunker(ChunkerInterface):
     body = soup.find('div', id='block-famcs-content') or soup.find(
       'article') or soup.find("body")
     if not body:
+      logger.warning(
+          "AdvancedHTMLChunker: нет body/article/block-famcs-content source=%s",
+          document.metadata.get("source", ""),
+      )
       return []
 
     chunks = []

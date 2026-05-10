@@ -1,7 +1,15 @@
-from typing import List, Dict, Any
+"""HTML chunker по тегам (заголовки + контент): CS-подобный main-селектор и heading в metadata."""
+
+import logging
+from typing import Any, Dict, List
+
 from bs4 import BeautifulSoup, Tag
 from langchain_core.documents import Document
+
 from src.interfaces.chunker_interfaces import ChunkerInterface
+
+logger = logging.getLogger(__name__)
+
 
 class HTMLContextChunker(ChunkerInterface):
     """
@@ -40,6 +48,11 @@ class HTMLContextChunker(ChunkerInterface):
         soup = BeautifulSoup(document.page_content, 'lxml')
         content_element = self._extract_main_content(soup)
         if not content_element:
+            logger.warning(
+                "HTMLContextChunker: нет узла по content_selector=%r source=%s",
+                self.content_selector,
+                document.metadata.get("source", ""),
+            )
             return []
 
         chunks = []

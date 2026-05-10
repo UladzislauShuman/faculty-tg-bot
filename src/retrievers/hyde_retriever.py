@@ -1,4 +1,8 @@
-"""HyDE (Hypothetical Document Embeddings) — обёртка над Embeddings для dense-поиска."""
+"""HyDE (Hypothetical Document Embeddings) — обёртка над Embeddings для dense-поиска.
+
+LLM строит гипотетический фрагмент ответа, он эмбеддится через inner; события пишутся в
+``hyde_trace_append`` для evaluation/trace.
+"""
 
 from __future__ import annotations
 
@@ -36,6 +40,7 @@ _HYDE_PROMPT_TEMPLATE = PromptTemplate(
 
 
 def _coerce_llm_text(result: Any) -> str:
+    """Текст из ответа LLM: str, атрибут content или str(result)."""
     if isinstance(result, str):
         return result.strip()
     content = getattr(result, "content", None)
@@ -45,6 +50,7 @@ def _coerce_llm_text(result: Any) -> str:
 
 
 def _mean_l2_normalize(vectors: List[List[float]]) -> List[float]:
+    """Покомпонентное среднее векторов и L2-нормировка (несколько гипотез HyDE)."""
     if not vectors:
         return []
     if len(vectors) == 1:
@@ -78,6 +84,7 @@ class HyDEQueryEmbeddings(Embeddings):
         self._verbose_console = bool(verbose_console)
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Индексация документов: тот же inner, без гипотез."""
         return self._inner.embed_documents(texts)
 
     def _emit_sink(
@@ -90,6 +97,7 @@ class HyDEQueryEmbeddings(Embeddings):
         embed_phase_note: Optional[str],
         hypo_notes: Sequence[str],
     ) -> None:
+        """Собрать событие HyDE (превью гипотез) и добавить в trace; при verbose — лог."""
         hypo_store: List[str] = []
         for h in hypotheses_raw:
             if len(h) <= _PREVIEW_H:
@@ -117,6 +125,7 @@ class HyDEQueryEmbeddings(Embeddings):
             )
 
     def embed_query(self, text: str) -> List[float]:
+        """Эмбеддинг запроса: гипотезы → inner.embed_query; при ошибке/пустоте — исходный текст."""
         hypo_notes: List[str] = []
         hypo_elapsed_total = 0.0
 
@@ -181,15 +190,18 @@ class HyDEQueryEmbeddings(Embeddings):
             return self._inner.embed_query(text)
 
     async def aembed_query(self, text: str) -> List[float]:
+        """Асинхронная обёртка над ``embed_query`` (выполнение в thread pool)."""
         return await asyncio.to_thread(self.embed_query, text)
 
     async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Асинхронная обёртка над ``embed_documents``."""
         return await asyncio.to_thread(self.embed_documents, texts)
 
     def _generate_hypotheses_traced(
         self,
         question: str,
     ) -> Tuple[List[str], List[str]]:
+        """Несколько независимых слотов гипотез; заметки с префиксами h1:, h2:, …."""
         out: List[str] = []
         notes: List[str] = []
         for hi in range(self._num_hypotheses):
@@ -206,6 +218,7 @@ class HyDEQueryEmbeddings(Embeddings):
         *,
         slot: int,
     ) -> Tuple[Optional[str], Optional[str]]:
+        """Один вызов LLM в отдельном потоке с таймаутом; возвращает (текст, заметка_ошибки)."""
         prompt_text = _HYDE_PROMPT_TEMPLATE.format(question=question)
 
         def _invoke() -> Tuple[str, Optional[str]]:

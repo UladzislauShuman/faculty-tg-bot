@@ -51,6 +51,7 @@ def main():
     dp["user_service"] = container.bot_user_service()
     dp["answer_service"] = container.bot_answer_service()
     dp["rag_chain"] = container.rag_chain()
+    dp["chat_only_chain"] = container.chat_only_chain()
     dp["semantic_routing_service"] = container.semantic_routing_service()
     dp["session_service"] = container.bot_session_service()
     logger.info("RAG-компоненты готовы.")

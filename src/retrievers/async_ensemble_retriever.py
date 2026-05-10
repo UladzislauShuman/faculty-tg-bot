@@ -1,3 +1,4 @@
+"""Обертка EnsembleRetriever: параллельный sync invoke двух ретриверов и RRF."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # --- ТЕЛЕГРАМ БОТ ---
   bot:
@@ -10,6 +8,11 @@ services:
       - "8080:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # Если в контейнере падает резолв fpmi.bsu.by, править IP при смене хостинга БГУ
+      - "fpmi.bsu.by:217.21.43.54"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - TGSERVER__TOKEN=${TGSERVER__TOKEN}
@@ -51,6 +54,11 @@ services:
     entrypoint: ["tail", "-f", "/dev/null"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
+      # Если в контейнере падает резолв fpmi.bsu.by, править IP при смене хостинга БГУ
+      - "fpmi.bsu.by:217.21.43.54"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     environment:
       - OLLAMA_HOST=${OLLAMA_HOST}
       - DB__HOST=postgres

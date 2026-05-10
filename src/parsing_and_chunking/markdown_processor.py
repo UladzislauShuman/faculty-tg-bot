@@ -1,24 +1,32 @@
+"""HTML → Markdown → сплит по заголовкам; метаданные из title и source."""
+import logging
 from typing import List
-import requests
+
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from langchain_text_splitters import MarkdownHeaderTextSplitter
 from langchain_core.documents import Document
 
 from src.interfaces.data_processor_interfaces import DataSourceProcessor
+from src.util.http_fetch import create_indexing_session
+
+logger = logging.getLogger(__name__)
 
 
 class MarkdownProcessor(DataSourceProcessor):
-  """
-  Простая стратегия: HTML -> Markdown -> Split by Headers (#, ##).
-  Хорошо работает для простых статей, плохо для таблиц.
-  """
+  """Парсинг основного блока страницы, markdownify, MarkdownHeaderTextSplitter."""
+
+  def __init__(self) -> None:
+    self._http = create_indexing_session()
 
   def process(self, source: str) -> List[Document]:
-    print(f"⚙️ Обработка {source} с помощью MarkdownProcessor...")
+    logger.info("MarkdownProcessor: %s", source)
     try:
-      response = requests.get(source, headers={"User-Agent": "Mozilla/5.0"},
-                              timeout=10, verify=False)
+      response = self._http.get(
+          source,
+          headers={"User-Agent": "Mozilla/5.0"},
+          timeout=10,
+      )
       response.raise_for_status()
       soup = BeautifulSoup(response.text, 'lxml')
 
@@ -31,8 +39,7 @@ class MarkdownProcessor(DataSourceProcessor):
       content_block = soup.find('div', id='block-famcs-content') or soup.find(
         'article')
       if not content_block:
-        print(
-          f"  - ⚠️ Предупреждение: Не найден основной блок контента на {source}.")
+        logger.warning("Не найден основной блок контента: %s", source)
         return []
 
       # Чистим
@@ -52,8 +59,8 @@ class MarkdownProcessor(DataSourceProcessor):
       for chunk in md_header_splits:
         chunk.metadata.update(base_metadata)
 
-      print(f"  - ✅ Успешно создано {len(md_header_splits)} чанков.")
+      logger.info("MarkdownProcessor: чанков=%s", len(md_header_splits))
       return md_header_splits
     except Exception as e:
-      print(f"  - ❌ Ошибка при обработке {source}: {e}")
+      logger.warning("Ошибка %s: %s", source, e)
       return []

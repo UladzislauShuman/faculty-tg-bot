@@ -1,157 +1,346 @@
-# 1. Источники данных
+# =============================================================================
+# config/config.yaml — единая точка правды для экспериментов и окружения бота
+# -----------------------------------------------------------------------------
+# Формат комментариев к параметрам:
+#   [значения] — допустимые варианты или тип (bool, int, строка HuggingFace id, …)
+#   [смысл]    — зачем параметр и как он влияет на систему
+# CLI/env могут переопределять отдельные поля на время команды (см. main.py).
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Раздел A — Файлы и каталоги (paths)
+# -----------------------------------------------------------------------------
+# [смысл] Куда пишутся логи, отчёты eval, QA-набор и служебные файлы.
+paths:
+  # [значения] любой путь от корня проекта
+  # [смысл] корневая папка для trace/report из evaluation и прочего вывода
+  output_dir: "output"
+  # [значения] путь к YAML с вопросами/эталонами
+  # [смысл] набор для python main.py test / test-matrix
+  qa_test_set: "qa-test-set.yaml"
+  # [значения] имя файла внутри output_dir или относительный путь
+  # [смысл] текстовый дамп чанков при индексации (отладка)
+  indexing: "indexing.txt"
+  # [значения] имя файла внутри output_dir или относительный путь
+  # [смысл] лог ответов интерактивного/CLI режима answer
+  run_bot: "answer.txt"
+  # [значения] имя файла внутри output_dir или относительный путь
+  # [смысл] лог извлечённых документов (retrieval)
+  retriever: "retriever.txt"
+  # [значения] путь к файлу
+  # [смысл] дамп URL/карты сайта при краулинге
+  sitemap: "sitemap.txt"
+  # [значения] путь к HTML/XML
+  # [смысл] тестовый источник страниц (разработка)
+  test_pages_source: "test_pages_source.html"
+  # [значения] путь к JSON checkpoint краулера
+  # [смысл] возобновление индексации с места остановки
+  default_checkpoint_path: "check_points/default_checkpoint.json"
+  # [значения] путь к файлу-флагу; пока файл существует, eval может ставить цикл на паузу
+  # [смысл] ручная пауза прогона тестов
+  pause_flag: "output/pause.flag"
+
+# -----------------------------------------------------------------------------
+# Раздел B — Источник данных для индексации (data_source)
+# -----------------------------------------------------------------------------
+# [смысл] Настройки веб-краулера (main.py index и пайплайн индексации).
 data_source:
+  # [значения] пока используется web (логика в crawlers)
+  # [смысл] тип источника контента
   type: web
-  url: "https://fpmi.bsu.by/about" # Стартовая точка для краулера
-  max_depth: 10 # Как глубоко уходить по ссылкам
+  # [значения] полный URL (https://…)
+  # [смысл] стартовая страница обхода
+  url: "https://fpmi.bsu.by/about"
+  # [значения] целое число ≥ 0
+  # [смысл] максимальная глубина переходов по ссылкам от стартового URL
+  max_depth: 10
+  # [значения] true | false
+  # [смысл] true — только URL из sitemap, false — обычный обход ссылок
   sitemap_only: false
 
-# 2. Модель для векторизации (Embeddings)
-# Используется для создания базы и поиска.
+# -----------------------------------------------------------------------------
+# Раздел C — Эмбеддинги документов и поиска (embedding_model)
+# -----------------------------------------------------------------------------
+# [смысл] Модель векторизации при индексации и dense-поиске (Chroma/Qdrant dense).
 embedding_model:
-  name: "intfloat/multilingual-e5-small" # Легкая модель, оптимизированная под CPU
+  # [значения] идентификатор на HuggingFace Hub (строка; семейство e5 — нужен префикс query: в коде)
+  # [смысл] архитектура эмбеддингов; должна совпадать при индексации и запросах. Смена модели = полная переиндексация.
+  # [откат] intfloat/multilingual-e5-small
+  name: "intfloat/multilingual-e5-large"
+  # [значения] cpu | cuda | cuda:0 … (зависит от установки PyTorch)
+  # [смысл] устройство вычисления эмбеддингов
   device: "cpu"
-  normalize_embeddings: true # Важно для косинусного сходства
+  # [значения] true | false
+  # [смысл] L2-нормализация векторов (желательно true для косинусной близости)
+  normalize_embeddings: true
+  # [смысл] не ходить в huggingface.co при старте; нужен полный кеш модели (первый скачивание — false)
+  local_files_only: false
 
-# 3. Модель для оценки (Evaluation)
-# Используется только в тестах (main.py test) как независимый судья.
-evaluation_model:
-  name: "cointegrated/rubert-tiny2" # Очень быстрая русская модель
-  device: "cpu"
-
-# 3.5 Настройки LLM-судьи (Evaluation Metrics)
-evaluation_metrics:
-  enabled: true                # Флаг: false — используется старый evaluator
-  judge_llm:
-    type: "ollama"             # Тот же провайдер, что и у generation LLM
-    model: "llama3.1"          # Должна быть загружена: ollama pull llama3.1
-    temperature: 0.0           # Детерминированные оценки, быстрее TTFT
-  metrics:
-    faithfulness: true         # Проверка галлюцинаций
-    answer_relevance: true     # Проверка релевантности ответа
-  timeout_seconds: 60          # asyncio.wait_for timeout на каждый LLM-вызов
-
-# 4. Настройки Поиска (Retrieval)
+# -----------------------------------------------------------------------------
+# Раздел D — Retrieval: бэкенды, гибрид, реранкер (retrievers)
+# -----------------------------------------------------------------------------
+# [смысл] Выбор активного ретривера и параметры Chroma+BM25, Qdrant, RRF, Cross-Encoder.
 retrievers:
-  active_type: "qdrant" # Варианты: chroma_bm25, qdrant
+  # [значения] chroma_bm25 | qdrant
+  # [смысл] какой фабричный ретривер собирает DI (гибрид dense+sparse там, где поддерживается)
+  active_type: "qdrant"
 
-  # --- Qdrant ---
   qdrant:
-    host: "localhost" # Замени на "qdrant", если запускаешь скрипты внутри Docker
+    # [значения] hostname или IP
+    # [смысл] хост Qdrant; в Docker Compose часто "qdrant", локально "localhost"; переопределение: env QDRANT_HOST
+    host: "localhost"
+    # [значения] целое число, порт REST API Qdrant
+    # [смысл] порт подключения клиента
     port: 6333
+    # [значения] строка — имя коллекции в Qdrant
+    # [смысл] изолированное хранилище чанков/векторов для этого бота
     collection_name: "fpmi_docs"
-    search_k: 5
+    # [значения] целое число ≥ 1 (типично 5–20; больше — выше recall, ниже риск «ответ за пределами top-k»)
+    # [смысл] сколько документов запрашивает dense+sparse до слияния/реранкера
+    # [откат] 5
+    search_k: 20
 
-  # Настройки для векторного поиска (ChromaDB)
   vector_store:
-    db_path_base: "data/chroma_db" # для генерации путей в тестах (data/chroma_db_markdown)
-    db_path: "data/chroma_db" # путь по умолчанию для "продакшена" (Бот читает отсюда)
-    search_k: 5 # Сколько документов изначально искать
+    # [значения] путь к каталогу Chroma
+    # [смысл] базовый путь для тестовых суффиксов (db_path_base + chunker → отдельные БД в тестах)
+    db_path_base: "data/chroma_db"
+    # [значения] путь к каталогу Chroma
+    # [смысл] сюда смотрит бот при active_type: chroma_bm25
+    db_path: "data/chroma_db"
+    # [значения] целое число ≥ 1
+    # [смысл] top-k векторного поиска в Chroma до гибрида/реранкера (держать в синхроне с qdrant.search_k при смене бэкенда)
+    # [откат] 5
+    search_k: 20
 
-  # Поиск по ключевым словам (Sparse retrieval)
   bm25:
+    # [значения] путь к .pkl
+    # [смысл] базовый путь индекса BM25 для генерации путей в тестах
     index_path_base: "data/bm25_index.pkl"
+    # [значения] путь к .pkl
+    # [смысл] фактический файл индекса (main.py может дописать суффикс chunker)
     index_path: "data/bm25_index.pkl"
 
-  # Веса для гибридного поиска (сумма должна быть 1.0)
   hybrid_weights:
+    # [значения] float 0.0–1.0; в сумме с keyword = 1.0
+    # [смысл] вес dense (вектор) в Reciprocal Rank Fusion
     vector: 0.7
+    # [значения] float 0.0–1.0; в сумме с vector = 1.0
+    # [смысл] вес sparse (BM25 / keyword) в RRF
     keyword: 0.3
-  # Настройки для Re-ranker'а (Переранжирование)
-  reranker:
-    enabled: true            # Легкое включение/отключение для экспериментов
-    type: "cross_encoder"
-    model: "DiTy/cross-encoder-russian-msmarco"
-    top_n: 3 # Сколько документов отдавать в LLM после переранжирования
 
-# 5. Настройки LLM (Генерация)
+  reranker:
+    # [значения] true | false
+    # [смысл] включить Cross-Encoder после ансамбля
+    enabled: true
+    # [значения] cross_encoder (текущая реализация в коде)
+    # [смысл] тип компрессора-документов
+    type: "cross_encoder"
+    # [значения] HuggingFace id модели cross-encoder
+    # [смысл] модель переранжирования кандидатов
+    model: "DiTy/cross-encoder-russian-msmarco"
+    # [значения] целое число ≥ 1 (часто 3–5; больше — богаче контекст, дольше generation)
+    # [смысл] сколько документов после реранкера отдаётся в LLM-контекст
+    # [откат] 3
+    top_n: 5
+
+# -----------------------------------------------------------------------------
+# Раздел E — LLM для ответов (providers)
+# -----------------------------------------------------------------------------
+# [смысл] Провайдеры генерации; активный выбирается env LLM_PROVIDER (например ollama).
 providers:
   ollama:
+    # [значения] ollama
+    # [смысл] дискриминатор для get_llm_from_config
     type: ollama
+    # [значения] имя модели в Ollama (ollama pull …)
+    # [смысл] модель основного ответа бота
     model: "llama3.1"
 
   yandex_gpt:
+    # [значения] yandex_gpt
     type: yandex_gpt
+    # [значения] строка — идентификатор/вариант модели в API Яндекса
     model: "yandexgpt-lite"
 
-# 6. Настройки тестирования (Evaluation)
-evaluation_settings:
-  mode: "all" # Варианты: all (всё), questions (только одиночные), scenarios (только диалоги)
-
-# 6.5 RAG pipeline (Sprint 4: latency instrumentation)
-rag_pipeline:
-  stage_timing_logs:
-    enabled: true   # false — без [TIMING] в логах (как до Sprint 4)
-
-# 6.6 HyDE (Sprint 6: hypothetical document embeddings для dense-поиска)
-# Включение: hyde.enabled: true — по умолчанию та же Ollama-модель, что и генерация ответов (providers.*), без лишних pull.
-hyde:
-  enabled: false
-  llm:
-    type: "ollama"
-    model: "llama3.1"   # синхрон с providers.ollama.model при LLM_PROVIDER=ollama
-    temperature: 0.7
-  timeout_seconds: 1000    # под CPU можно увеличить; при частых таймаутах — tinyllama или false
-  num_hypotheses: 2     # >1 — усреднение эмбеддингов гипотез, рост latency
-  # true — строка INFO [HyDE] в консоли на каждый dense embed_query (+ HYDE_CONSOLE=1 в окружении)
-  verbose_console: false
-
-# 6.7 Индексация (main.py index): чанкер по умолчанию; CLI --chunker при указании перебивает yaml.
+# -----------------------------------------------------------------------------
+# Раздел F — Индексация: чанкер по умолчанию (indexing)
+# -----------------------------------------------------------------------------
+# [смысл] main.py index без --chunker; CLI --chunker перебивает это значение.
 indexing:
-  chunker: parent # markdown | semantic | unstructured | parent
+  # [значения] markdown | semantic | unstructured | parent
+  # [смысл] какой процессор/чанкер резать документы при индексации
+  chunker: parent
 
+# -----------------------------------------------------------------------------
+# Раздел G — Parent–child чанки и docstore (parent_document)
+# -----------------------------------------------------------------------------
+# [смысл] Мелкий поиск + крупный контекст для LLM; pickle-карта родителей на диске.
 parent_document:
+  # [значения] true | false
+  # [смысл] true — в индекс идут дети, в ответ подставляются родители из docstore
   enabled: true
+  # [значения] int > 0 (символы или токены — как в RecursiveCharacterTextSplitter)
+  # [смысл] размер дочернего чанка для retrieval
   child_chunk_size: 300
+  # [значения] int > 0
+  # [смысл] размер родительского блока (секция) до нарезки детей
   parent_chunk_size: 1200
+  # [значения] путь к .pkl
+  # [смысл] сериализованная карта parent_id → Document для ParentDocumentRetriever
   docstore_path: "data/parent_docstore.pkl"
 
-# 6.8 Семантический роутинг в Telegram-боте (Sprint 8)
-# enabled: false — все пользовательские сообщения идут в RAG (как до спринта).
-semantic_routing:
+# -----------------------------------------------------------------------------
+# Раздел H — HyDE (dense-запрос через гипотетический документ)
+# -----------------------------------------------------------------------------
+# [смысл] Опциональный LLM-шаг перед embed_query; sparse остаётся на исходном тексте.
+# Отключение: enabled false — поведение как без HyDE (см. ROADMAP Sprint 6).
+hyde:
+  # [значения] true | false; также main.py --hyde=on|off на время команды
+  # [смысл] включить обёртку эмбеддингов запроса
+  enabled: false
+  llm:
+    # [значения] ollama | yandex_gpt (как в get_llm_from_config)
+    type: "ollama"
+    # [значения] имя модели провайдера
+    # [смысл] модель для генерации гипотезы; желательно согласовать с providers при Ollama
+    model: "llama3.1"
+    # [значения] float 0.0–2.0 (типично 0–1)
+    # [смысл] креативность гипотезы; выше — больше разброс текста
+    temperature: 0.7
+  # [значения] секунды, float/int > 0
+  # [смысл] таймаут asyncio/пула на одну гипотезу; при срабатывании — fallback на обычный embed_query
+  timeout_seconds: 1000
+  # [значения] целое число ≥ 1
+  # [смысл] число гипотез; >1 усредняет эмбеддинги (лучше качество, выше latency)
+  num_hypotheses: 2
+  # [значения] true | false; env HYDE_CONSOLE=1 может дублировать вывод в консоль
+  # [смысл] подробные строки [HyDE] в stdout при отладке
+  verbose_console: true
+
+# -----------------------------------------------------------------------------
+# Раздел I — Память диалога (memory)
+# -----------------------------------------------------------------------------
+# [смысл] История в PostgreSQL + опционально summary_window (Sprint 3).
+memory:
+  # [значения] true | false
+  # [смысл] включить расширенную память (summary + окно); false — проще/старое окно
   enabled: true
-  method: llm # regex | llm (llm — дополнительный вызов модели, см. semantic_routing.llm)
-  timeout_seconds: 100 # только для method: llm (asyncio.wait_for)
+  # [значения] summary_window | window
+  # [смысл] summary_window — LLM-сводка + последние реплики; window — только скользящее окно
+  type: "summary_window"
+  # [значения] int ≥ 0
+  # [смысл] сколько последних «сырых» пар Q/A держать после summary
+  window_size: 2
+  # [значения] int ≥ 1
+  # [смысл] при каком числе ответов в сессии запускать суммаризацию
+  summarization_threshold: 4
+  summary_llm:
+    # [значения] ollama | yandex_gpt
+    type: "ollama"
+    # [значения] имя модели
+    model: "llama3.1"
+    # [значения] float; 0 — детерминированнее
+    temperature: 0.0
+  # [значения] секунды
+  # [смысл] таймаут на вызов суммаризации (обычно ≥ generation)
+  summary_timeout_seconds: 90
+
+# -----------------------------------------------------------------------------
+# Раздел J — Семантический роутинг в Telegram (semantic_routing)
+# -----------------------------------------------------------------------------
+# [смысл] До RAG классифицировать smalltalk / direct_link / rag; снижает latency на приветствиях.
+# Полный откат: enabled false — всё идёт в RAG.
+semantic_routing:
+  # [значения] true | false
+  enabled: true
+  # [значения] regex | llm
+  # [смысл] regex — правила без LLM; llm — отдельный короткий вызов модели (temperature ниже)
+  # Режим роутинга: llm | regex; бот для smalltalk/direct_link может отвечать через LLM + историю (use_llm_reply).
+  method: llm
+  use_llm_reply: true
+  # [значения] секунды; используется при method: llm
+  # [смысл] asyncio.wait_for на классификацию
+  timeout_seconds: 100
+  # [значения] произвольная строка (экранируйте кавычки в YAML при необходимости)
+  # [смысл] фиксированный ответ при классе smalltalk
   smalltalk_reply: "Здравствуйте! Я бот ФПМИ БГУ. Задайте вопрос о факультете — отвечу по официальным материалам из базы знаний."
+  # [значения] многострочная строка (\n допустим в кавычках)
+  # [смысл] ответ при direct_link (ссылки на сайт/разделы)
   direct_link_reply: "Официальный сайт факультета: https://fpmi.bsu.by\nАктуальное расписание и объявления — в разделах сайта («Расписание», «Новости»)."
   llm:
+    # [значения] ollama | yandex_gpt
     type: ollama
+    # [значения] имя модели (лучше лёгкая/та же, что доступна локально)
     model: llama3.1
+    # [значения] float; 0 для стабильной классификации
     temperature: 0.0
 
-# 7. Пути к файлам
-paths:
-  output_dir: "output"
-  qa_test_set: "qa-test-set.yaml"
-  indexing: "indexing.txt" # Сюда сохраняется текстовый дамп чанков
-  run_bot: "answer.txt"    # Лог ответов бота
-  retriever: "retriever.txt" # Лог работы ретривера
-  sitemap: "sitemap.txt"
-  test_pages_source: "test_pages_source.html"
-  default_checkpoint_path: "check_points/default_checkpoint.json"
-  pause_flag: "output/pause.flag"
+# -----------------------------------------------------------------------------
+# Раздел K — Наблюдаемость RAG (rag_pipeline)
+# -----------------------------------------------------------------------------
+# [смысл] Логирование длительностей этапов reformulation / retrieval / reranker / generation.
+rag_pipeline:
+  stage_timing_logs:
+    # [значения] true | false; также env RAG_TIMING_LOGS=0 может отключать в main.py
+    # [смысл] печать строк [TIMING] stage=… в логах
+    enabled: true
 
-# 8. Память диалога (Sprint 3: semantic / summary)
-memory:
-  enabled: true                  # false = старое скользящее окно без summary
-  type: "summary_window"         # Тип: "summary_window" | "window"
-  window_size: 2                 # Кол-во последних сырых реплик (пар Q/A) после summary
-  summarization_threshold: 4     # Суммаризировать, когда answer_count >= этого значения
-  summary_llm:
+# -----------------------------------------------------------------------------
+# Раздел L — Eval: быстрая модель схожести (evaluation_model)
+# -----------------------------------------------------------------------------
+# [смысл] Лёгкие эмбеддинги для метрик/эвристик в eval (не путать с evaluation_metrics.judge_llm).
+evaluation_model:
+  # [значения] HuggingFace id (sentence-transformers, мультиязычная; подходит для семантической близости в eval)
+  # [смысл] сильнее tiny-моделей по выразительности; тяжелее rubert-tiny2 по RAM и времени прогона
+  # [откат] cointegrated/rubert-tiny2
+  name: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+  # [значения] cpu | cuda …
+  device: "cpu"
+
+# -----------------------------------------------------------------------------
+# Раздел M — Eval: LLM-as-a-Judge (evaluation_metrics)
+# -----------------------------------------------------------------------------
+# [смысл] Faithfulness и Relevance через LLM; enabled false — старый путь evaluator в коде.
+evaluation_metrics:
+  # [значения] true | false
+  # [смысл] включить судью-LLM для метрик качества ответа
+  enabled: true
+  judge_llm:
+    # [значения] ollama | yandex_gpt
     type: "ollama"
+    # [значения] имя модели (должна быть доступна, например ollama pull)
     model: "llama3.1"
+    # [значения] float; 0.0 — повторяемые оценки
     temperature: 0.0
-  summary_timeout_seconds: 90    # Суммаризация дольше ответа — больший таймаут
+  metrics:
+    # [значения] true | false
+    faithfulness: true
+    # [значения] true | false
+    answer_relevance: true
+  # [значения] секунды
+  # [смысл] таймаут на каждый вызов судьи (asyncio.wait_for)
+  timeout_seconds: 60
 
-# 9. Матрица прогона (main.py test-matrix)
+# -----------------------------------------------------------------------------
+# Раздел N — Eval: режим прогона одиночных/сценариев (evaluation_settings)
+# -----------------------------------------------------------------------------
+evaluation_settings:
+  # [значения] all | questions | scenarios
+  # [смысл] all — всё; questions — только одиночные вопросы; scenarios — только многоходовые диалоги
+  mode: "all"
+
+# -----------------------------------------------------------------------------
+# Раздел O — Матрица сценариев (evaluation_scenarios)
+# -----------------------------------------------------------------------------
+# [смысл] Список именованных профилей для main.py test-matrix: chunker, index_mode, force_index, overrides.
+# overrides — частичный deep-merge поверх этого файла на время сценария.
 evaluation_scenarios:
-  # Совпадает с быстрым пунктом 1 в test.sh: markdown, test, chroma_bm25, summary из config, --force-index
   - name: "baseline_like_test_sh"
     chunker: markdown
     index_mode: test
     force_index: true
     overrides: {}
 
-  # Тот же профиль что baseline_like_test_sh, но HyDE для dense-поиска (hyde.llm — как в секции hyde выше / обычно та же модель, что генерация)
   - name: "chroma_bm25_hyde"
     chunker: markdown
     index_mode: test
@@ -160,7 +349,6 @@ evaluation_scenarios:
       hyde:
         enabled: true
 
-  # Только Qdrant как backend; память как в базовом config.yaml
   - name: "qdrant"
     chunker: markdown
     index_mode: test
@@ -169,7 +357,6 @@ evaluation_scenarios:
       retrievers:
         active_type: qdrant
 
-  # Как chroma_bm25_hyde, но backends Qdrant hybrid (dense+sparse); HyDE только на dense
   - name: "qdrant_hyde"
     chunker: markdown
     index_mode: test
@@ -180,7 +367,6 @@ evaluation_scenarios:
       hyde:
         enabled: true
 
-  # Qdrant + явный summary_window
   - name: "qdrant_summary_window"
     chunker: markdown
     index_mode: test
@@ -192,7 +378,6 @@ evaluation_scenarios:
         enabled: true
         type: summary_window
 
-  # Qdrant + скользящее окно без LLM-суммаризации (контраст к qdrant_summary_window)
   - name: "qdrant_memory_window"
     chunker: markdown
     index_mode: test

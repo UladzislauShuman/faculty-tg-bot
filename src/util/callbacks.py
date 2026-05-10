@@ -18,7 +18,10 @@ class ProfilingCallbackHandler(BaseCallbackHandler):
 
   def on_retriever_start(self, serialized: Dict[str, Any], query: str,
       **kwargs: Any) -> None:
-    logger.info(f"🔍 [RETRIEVER] Начинаем поиск для запроса: '{query}'")
+    preview = (query or "")[:120]
+    if len(query or "") > 120:
+      preview = preview + "…"
+    logger.info("🔍 [RETRIEVER] старт поиска, query_preview=%r", preview)
     self.starts['retriever'] = time.perf_counter()
 
   def on_retriever_end(self, documents: List[Document], **kwargs: Any) -> None:

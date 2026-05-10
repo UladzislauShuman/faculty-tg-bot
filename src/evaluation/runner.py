@@ -1,10 +1,15 @@
+"""Прогон E2E evaluation: вопросы из qa-set, RAG, hit-rate, LLM-judge, trace/report.
+
+Пишет отчёты в paths.output_dir; может ставить паузу между шагами и обрабатывать сигналы.
+"""
+import asyncio
+import copy
+import logging
 import os
 import re
+import signal
 import sys
 import time
-import copy
-import signal
-import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +19,8 @@ from src.evaluation.schemas import EvalScore
 from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
 from src.retrievers.hyde_trace_context import hyde_trace_begin, hyde_trace_end
 from src.util.yaml_parser import TestSetLoader
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,8 +35,7 @@ class EvaluationPause:
 
 
 class TestPipelineRunner:
-  """
-  Класс, отвечающий за выполнение E2E тестов RAG-системы.
+  """Оркестратор тестов: DI container, БД-сервисы бота, RAG, метрики, файлы trace/report.
   """
 
   # Константы
@@ -302,7 +308,7 @@ class TestPipelineRunner:
           line = line.rstrip() + f" | {' / '.join(bits)}\n"
         f.write(line + "\n")
 
-    print(f"\n📄 Отчет сохранен: {report_path}")
+    logger.info("Отчёт сохранён: %s", report_path)
 
   async def run(
       self,
@@ -348,12 +354,12 @@ class TestPipelineRunner:
 
     if args.need_index:
       from src.pipelines.indexing.pipeline import run_indexing
-      print(f"\n🏗️  Запуск индексации ({args.chunker})...")
+      logger.info("Запуск индексации (chunker=%s)", args.chunker)
       processor = self.container.data_processor()
       run_indexing(self.config, processor, mode=args.index_mode)
 
     test_mode = self.config.get("evaluation_settings", {}).get("mode", "all")
-    print(f"\n🧪 ЗАПУСК ТЕСТИРОВАНИЯ (Режим: {test_mode})...")
+    logger.info("Запуск тестирования (режим=%s)", test_mode)
 
     loader = TestSetLoader(self.config["paths"]["qa_test_set"])
     retrieval_chain = self.container.retrieval_chain()
@@ -370,7 +376,7 @@ class TestPipelineRunner:
     os.makedirs(self.output_dir, exist_ok=True)
     output_stem = self._output_label_stem(args)
     trace_path = os.path.join(self.output_dir, f"trace_{output_stem}.md")
-    print(f"📝 Лог: {trace_path}")
+    logger.info("Trace лог: %s", trace_path)
 
     total_hit_rate = sum(int(r["hit"]) for r in results)
 
@@ -407,7 +413,7 @@ class TestPipelineRunner:
         start_q = int(getattr(args, "start_question_idx", 0) or 0)
 
         if test_mode in ("all", "questions") and qa_set:
-          print(f"\n🔎 [БЛОК 1] Одиночные вопросы ({len(qa_set)} шт)...")
+          logger.info("Блок 1: одиночные вопросы (%s шт)", len(qa_set))
           for i in range(start_q, len(qa_set)):
             if _pause_requested():
               interrupted = EvaluationPause("questions", i, 0, 0, None)
@@ -425,7 +431,10 @@ class TestPipelineRunner:
             hit = self._calculate_hit_rate(qa["answer"], docs)
             total_hit_rate += hit
 
-            print(f"[{i + 1}/{len(qa_set)}] {qa['question'][:50]}...")
+            qpv = qa["question"]
+            if len(qpv) > 120:
+              qpv = qpv[:117] + "..."
+            logger.info("[%s/%s] %s", i + 1, len(qa_set), qpv)
 
             safe_docs: List[Any] = []
             current_chars = 0
@@ -471,8 +480,11 @@ class TestPipelineRunner:
               )
 
               icon = "✅" if hit else "❌"
-              print(
-                  f"   -> {icon} Hit | Score: {score:.2f} | {latency:.1f}s"
+              logger.info(
+                  "   -> %s Hit | score=%.2f | latency=%.1fs",
+                  icon,
+                  score,
+                  latency,
               )
 
               results.append({
@@ -486,7 +498,7 @@ class TestPipelineRunner:
                   "relevance": rel_score.score if rel_score else None,
               })
             except Exception as e:
-              print(f"   -> ❌ Error: {e}")
+              logger.exception("Ошибка при ответе на вопрос #%s", i + 1)
               trace_file.write(f"## Error: {e}\n")
 
             if _pause_requested():
@@ -511,8 +523,8 @@ class TestPipelineRunner:
           scenarios = loader.get_test_scenarios()
 
         if interrupted is None and scenarios:
-          print(
-              f"\n🎬 [БЛОК 2] Многошаговые сценарии ({len(scenarios)} шт)..."
+          logger.info(
+              "Блок 2: многошаговые сценарии (%s шт)", len(scenarios)
           )
           n_qa = len(qa_set)
           for sc_idx, sc in enumerate(scenarios):
@@ -551,11 +563,14 @@ class TestPipelineRunner:
                 trace_file.write(
                     f"## 🎬 Сценарий: {sc['name']} (Session: {session_id})\n\n"
                 )
-                print(f"\n--- Сценарий: {sc['name']} ---")
+                logger.info("Сценарий: %s", sc["name"])
                 header_written = True
 
               display_step = step_idx + 1
-              print(f"  Шаг {display_step}: {step['q'][:50]}...")
+              sq = step["q"]
+              if len(sq) > 120:
+                sq = sq[:117] + "..."
+              logger.info("  Шаг %s: %s", display_step, sq)
               start_time = time.time()
               hy_snap_sc: List[Dict[str, Any]] = []
               hy_tok_sc = None
@@ -606,9 +621,11 @@ class TestPipelineRunner:
                 )
 
                 icon = "✅" if hit else "❌"
-                print(
-                    f"     -> {icon} Hit | Score: {score:.2f} | "
-                    f"{latency:.1f}s"
+                logger.info(
+                    "     -> %s Hit | score=%.2f | latency=%.1fs",
+                    icon,
+                    score,
+                    latency,
                 )
 
                 results.append({
@@ -624,7 +641,11 @@ class TestPipelineRunner:
                     "relevance": rel_score.score if rel_score else None,
                 })
               except Exception as e:
-                print(f"     -> ❌ Error: {e}")
+                logger.exception(
+                    "Ошибка в сценарии «%s», шаг %s",
+                    sc["name"],
+                    display_step,
+                )
                 trace_file.write(
                     f"## Error on step {display_step}: {e}\n"
                 )
@@ -657,30 +678,29 @@ class TestPipelineRunner:
           "lat": sum(r["latency"] for r in results) / len(results),
           "hit": total_hit_rate / len(results),
       }
-      print("\n" + "=" * 60)
-      print(f"📊 ИТОГИ ({args.chunker} | Режим: {test_mode})")
-      print(f"✅ Hit Rate: {avg_metrics['hit']:.2%}")
-      print(f"✅ Score (aggregate): {avg_metrics['sim']:.4f}")
-      print(f"⏱️  Avg Latency: {avg_metrics['lat']:.2f}s")
+      logger.info("=" * 60)
+      logger.info(
+          "Итоги chunker=%s режим=%s", args.chunker, test_mode
+      )
+      logger.info("Hit rate: %.2f%%", avg_metrics["hit"] * 100)
+      logger.info("Score (aggregate): %.4f", avg_metrics["sim"])
+      logger.info("Avg latency: %.2fs", avg_metrics["lat"])
       rows_f = [r for r in results if r.get("faithfulness") is not None]
       rows_r = [r for r in results if r.get("relevance") is not None]
       if rows_f:
         avg_faith = sum(r["faithfulness"] for r in rows_f) / len(rows_f)
-        print(
-            f"✅ Avg Faithfulness: {avg_faith:.4f} "
-            f"(n={len(rows_f)})"
+        logger.info(
+            "Avg faithfulness: %.4f (n=%s)", avg_faith, len(rows_f)
         )
       if rows_r:
         avg_rel = sum(r["relevance"] for r in rows_r) / len(rows_r)
-        print(
-            f"✅ Avg Relevance: {avg_rel:.4f} "
-            f"(n={len(rows_r)})"
+        logger.info(
+            "Avg relevance: %.4f (n=%s)", avg_rel, len(rows_r)
         )
       self._save_final_report(results, args, avg_metrics, output_stem)
     elif not results:
-      print(
-          "\n⚠️ Нет результатов для отображения "
-          "(проверьте qa-test-set.yaml и режим тестирования)."
+      logger.warning(
+          "Нет результатов (проверьте qa-test-set и evaluation_settings.mode)."
       )
 
     return results, interrupted

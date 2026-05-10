@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, List, Optional
 
 from langchain_core.chat_history import BaseChatMessageHistory
@@ -15,12 +16,12 @@ if TYPE_CHECKING:
   from src.tg_bot.repositories.interfaces import ISessionRepository
   from src.tg_bot.services.summarizer import SummarizerService
 
+logger = logging.getLogger(__name__)
+
 
 class ReadOnlyPostgresHistory(BaseChatMessageHistory):
-  """
-  Адаптер истории для LangChain.
-  Только чтение из БД; summary кешируется в rag_bot_sessions.summary (Sprint 3).
-  """
+  """История для LangChain: только чтение из БД; summary в rag_bot_sessions."""
+
   def __init__(
     self,
     session_id: str,
@@ -54,7 +55,11 @@ class ReadOnlyPostgresHistory(BaseChatMessageHistory):
     return out
 
   async def aget_messages(self) -> List[BaseMessage]:
-    """Контекст для RAG: при memory.enabled — summary + последнее окно Q/A."""
+    """Собирает сообщения для LangChain: либо последние Q/A, либо summary + окно.
+
+    Ветка без memory: только последние пары из БД.
+    С memory и порогом: summary в SystemMessage + последние реплики.
+    """
     memory_on = (
         self._memory_enabled
         and self._session_repo is not None
@@ -65,6 +70,11 @@ class ReadOnlyPostgresHistory(BaseChatMessageHistory):
       answers = await self._repo.get_session_answers(
           self.session_id, self._window_size
       )
+      logger.debug(
+          "История сессии %s: режим окна без summary, пар=%s",
+          self.session_id,
+          len(answers),
+      )
       return self._qa_pairs_to_messages(answers)
 
     all_answers = await self._repo.get_session_answers(
@@ -73,11 +83,16 @@ class ReadOnlyPostgresHistory(BaseChatMessageHistory):
 
     if len(all_answers) < self._summarization_threshold:
       recent = all_answers[-self._window_size :]
+      logger.debug(
+          "История сессии %s: мало сообщений, summary не нужен",
+          self.session_id,
+      )
       return self._qa_pairs_to_messages(recent)
 
     messages: List[BaseMessage] = []
     cached_summary = await self._session_repo.get_summary(self.session_id)
     if not cached_summary:
+      logger.info("История сессии %s: генерация summary (кэш пуст)", self.session_id)
       raw_msgs: List[BaseMessage] = []
       for ans in all_answers:
         raw_msgs.append(HumanMessage(content=ans.question))

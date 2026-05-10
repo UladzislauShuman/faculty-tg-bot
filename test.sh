@@ -172,7 +172,7 @@ else
     read -p "   Введите [chroma_bm25/qdrant] (По умолчанию: chroma_bm25): " ACTIVE_TYPE
     ACTIVE_TYPE=${ACTIVE_TYPE:-chroma_bm25}
 
-    # 7. Память диалога (memory.type, Sprint 3)
+    # 7. Память диалога
     echo -e "\n${BLUE}7. Режим памяти (memory.type)${NC}"
     echo "   - summary_window : после порога — summary + последние N реплик"
     echo "   - window         : только скользящее окно (сырые реплики), без LLM-summary"
@@ -189,7 +189,7 @@ else
         MEMORY_OFF_FLAG=""
     fi
 
-    # 9. HyDE (Sprint 6)
+    # 9. HyDE
     echo -e "\n${BLUE}9. HyDE — гипотетический dense-запрос (hyde.enabled)${NC}"
     echo "   - config : не передавать флаг в main.py (брать из config.yaml)"
     echo "   - on     : --hyde=on (модель — hyde.llm в config.yaml; в дефолте та же что providers.ollama)"

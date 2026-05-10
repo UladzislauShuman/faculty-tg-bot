@@ -1,3 +1,4 @@
+"""Семантический роутинг для бота: smalltalk / direct_link / rag (regex или LLM)."""
 from __future__ import annotations
 
 import asyncio
@@ -39,7 +40,8 @@ _ROUTER_PROMPT = ChatPromptTemplate.from_messages(
             "- direct_link: просьба дать ссылку, сайт, URL; где посмотреть "
             "расписание; официальный сайт\n"
             "- rag: любые фактические вопросы о факультете, декане, баллах, "
-            "поступлении, правилах\n\n"
+            "поступлении, правилах; также уточняющие вопросы по уже обсуждаемым "
+            "фактам («сколько это лет?», «к какому году?»)\n\n"
             "Сообщение: {query}\n"
             "Класс:",
         ),
@@ -72,10 +74,12 @@ _SMALLTALK_STRICT = re.compile(
 
 @dataclass(frozen=True)
 class RoutingDecision:
-    """use_rag=False — готовый ответ в answer; иначе нужен полный RAG."""
+  """use_rag=False: ответ без поиска по базе; при use_llm_for_reply — LLM + история."""
 
-    use_rag: bool
-    answer: Optional[str]
+  use_rag: bool
+  answer: Optional[str]
+  non_rag_label: Optional[Literal["smalltalk", "direct_link"]] = None
+  use_llm_for_reply: bool = False
 
 
 @runtime_checkable
@@ -84,39 +88,52 @@ class SemanticRoutingPort(Protocol):
 
 
 class PassthroughSemanticRouting:
-    async def route(self, query: str) -> RoutingDecision:
-        _ = query
-        return RoutingDecision(use_rag=True, answer=None)
+  async def route(self, query: str) -> RoutingDecision:
+    _ = query
+    return RoutingDecision(use_rag=True, answer=None)
 
 
 class RegexSemanticRouting:
-    def __init__(
-        self,
-        smalltalk_reply: str,
-        direct_link_reply: str,
-    ) -> None:
-        self._smalltalk_reply = smalltalk_reply
-        self._direct_link_reply = direct_link_reply
+  def __init__(
+      self,
+      smalltalk_reply: str,
+      direct_link_reply: str,
+      *,
+      use_llm_reply: bool = True,
+  ) -> None:
+    self._smalltalk_reply = smalltalk_reply
+    self._direct_link_reply = direct_link_reply
+    self._use_llm_reply = use_llm_reply
 
-    def _label(self, query: str) -> RouteLabel:
-        t = (query or "").strip()
-        if not t:
-            return "rag"
-        tl = t.lower()
-        if _DIRECT_HINTS.search(tl):
-            return "direct_link"
-        if _SMALLTALK_STRICT.match(tl):
-            return "smalltalk"
-        return "rag"
+  def _label(self, query: str) -> RouteLabel:
+    t = (query or "").strip()
+    if not t:
+      return "rag"
+    tl = t.lower()
+    if _DIRECT_HINTS.search(tl):
+      return "direct_link"
+    if _SMALLTALK_STRICT.match(tl):
+      return "smalltalk"
+    return "rag"
 
-    async def route(self, query: str) -> RoutingDecision:
-        label = self._label(query)
-        logger.info("[semantic_routing] method=regex label=%s", label)
-        if label == "smalltalk":
-            return RoutingDecision(use_rag=False, answer=self._smalltalk_reply)
-        if label == "direct_link":
-            return RoutingDecision(use_rag=False, answer=self._direct_link_reply)
-        return RoutingDecision(use_rag=True, answer=None)
+  async def route(self, query: str) -> RoutingDecision:
+    label = self._label(query)
+    logger.info("[semantic_routing] method=regex label=%s", label)
+    if label == "smalltalk":
+      return RoutingDecision(
+          use_rag=False,
+          answer=self._smalltalk_reply,
+          non_rag_label="smalltalk",
+          use_llm_for_reply=self._use_llm_reply,
+      )
+    if label == "direct_link":
+      return RoutingDecision(
+          use_rag=False,
+          answer=self._direct_link_reply,
+          non_rag_label="direct_link",
+          use_llm_for_reply=self._use_llm_reply,
+      )
+    return RoutingDecision(use_rag=True, answer=None)
 
 
 def _normalize_llm_route(raw: str) -> RouteLabel:
@@ -136,42 +153,55 @@ def _normalize_llm_route(raw: str) -> RouteLabel:
 
 
 class LlmSemanticRouting:
-    def __init__(
-        self,
-        chain: Runnable,
-        smalltalk_reply: str,
-        direct_link_reply: str,
-        timeout_seconds: float,
-    ) -> None:
-        self._chain = chain
-        self._smalltalk_reply = smalltalk_reply
-        self._direct_link_reply = direct_link_reply
-        self._timeout_seconds = timeout_seconds
+  def __init__(
+      self,
+      chain: Runnable,
+      smalltalk_reply: str,
+      direct_link_reply: str,
+      timeout_seconds: float,
+      *,
+      use_llm_reply: bool = True,
+  ) -> None:
+    self._chain = chain
+    self._smalltalk_reply = smalltalk_reply
+    self._direct_link_reply = direct_link_reply
+    self._timeout_seconds = timeout_seconds
+    self._use_llm_reply = use_llm_reply
 
-    async def route(self, query: str) -> RoutingDecision:
-        label: RouteLabel = "rag"
-        try:
-            raw = await asyncio.wait_for(
-                self._chain.ainvoke({"query": query}),
-                timeout=self._timeout_seconds,
-            )
-            label = _normalize_llm_route(str(raw))
-        except asyncio.TimeoutError:
-            logger.warning(
-                "[semantic_routing] method=llm timeout=%ss — fallback rag",
-                self._timeout_seconds,
-            )
-        except Exception as exc:
-            logger.warning(
-                "[semantic_routing] method=llm error=%s — fallback rag",
-                exc,
-            )
-        logger.info("[semantic_routing] method=llm label=%s", label)
-        if label == "smalltalk":
-            return RoutingDecision(use_rag=False, answer=self._smalltalk_reply)
-        if label == "direct_link":
-            return RoutingDecision(use_rag=False, answer=self._direct_link_reply)
-        return RoutingDecision(use_rag=True, answer=None)
+  async def route(self, query: str) -> RoutingDecision:
+    label: RouteLabel = "rag"
+    try:
+      raw = await asyncio.wait_for(
+          self._chain.ainvoke({"query": query}),
+          timeout=self._timeout_seconds,
+      )
+      label = _normalize_llm_route(str(raw))
+    except asyncio.TimeoutError:
+      logger.warning(
+          "[semantic_routing] method=llm timeout=%ss — fallback rag",
+          self._timeout_seconds,
+      )
+    except Exception as exc:
+      logger.warning(
+          "[semantic_routing] method=llm error=%s — fallback rag",
+          exc,
+      )
+    logger.info("[semantic_routing] method=llm label=%s", label)
+    if label == "smalltalk":
+      return RoutingDecision(
+          use_rag=False,
+          answer=self._smalltalk_reply,
+          non_rag_label="smalltalk",
+          use_llm_for_reply=self._use_llm_reply,
+      )
+    if label == "direct_link":
+      return RoutingDecision(
+          use_rag=False,
+          answer=self._direct_link_reply,
+          non_rag_label="direct_link",
+          use_llm_for_reply=self._use_llm_reply,
+      )
+    return RoutingDecision(use_rag=True, answer=None)
 
 
 def create_semantic_routing_service(config: Any) -> SemanticRoutingPort:
@@ -187,8 +217,14 @@ def create_semantic_routing_service(config: Any) -> SemanticRoutingPort:
     smalltalk = str(block.get("smalltalk_reply") or _DEFAULT_SMALLTALK)
     direct = str(block.get("direct_link_reply") or _DEFAULT_DIRECT_LINK)
 
+    use_llm_reply = bool(block.get("use_llm_reply", True))
+
     if method == "regex":
-        return RegexSemanticRouting(smalltalk, direct)
+        return RegexSemanticRouting(
+            smalltalk,
+            direct,
+            use_llm_reply=use_llm_reply,
+        )
     if method == "llm":
         # Ленивый импорт: pipeline тянет history/БД — для regex не нужен.
         from src.pipelines.rag.pipeline import get_llm_from_config
@@ -199,7 +235,13 @@ def create_semantic_routing_service(config: Any) -> SemanticRoutingPort:
         llm = get_llm_from_config(llm_cfg)
         chain = _ROUTER_PROMPT | llm | StrOutputParser()
         timeout = float(block.get("timeout_seconds", 20))
-        return LlmSemanticRouting(chain, smalltalk, direct, timeout)
+        return LlmSemanticRouting(
+            chain,
+            smalltalk,
+            direct,
+            timeout,
+            use_llm_reply=use_llm_reply,
+        )
     raise ValueError(
         f"semantic_routing.method must be 'regex' or 'llm', got: {method!r}"
     )

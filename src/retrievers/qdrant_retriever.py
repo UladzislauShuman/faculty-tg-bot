@@ -1,3 +1,8 @@
+"""Qdrant hybrid retriever: dense HuggingFace + sparse FastEmbed (BM25-like).
+
+Имена векторов dense/sparse должны совпадать с индексацией в pipelines/indexing.
+"""
+import logging
 import os
 from typing import Optional
 
@@ -7,23 +12,31 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient
 
+from src.util.hf_embeddings import huggingface_embedding_model_kwargs
+
 from .e5_query_embeddings import E5QueryEmbeddings
 from .hyde_retriever import HyDEQueryEmbeddings
+
+logger = logging.getLogger(__name__)
 
 
 def create_qdrant_retriever(
   config: dict,
   hyde_llm: Optional[BaseLanguageModel] = None,
 ) -> BaseRetriever:
-  print("Инициализация Hybrid Qdrant ретривера (Dense + Sparse)...")
+  """Hybrid Qdrant: dense query embeddings, sparse по исходному тексту запроса.
+
+  Шаги: embeddings → опционально HyDE → QdrantVectorStore HYBRID → as_retriever(k).
+  """
+  logger.info("Qdrant hybrid: инициализация")
   qdrant_config = config['retrievers']['qdrant']
 
   # 1. Dense Embeddings (E5)
-  model_name = config['embedding_model']['name']
-  device = config['embedding_model']['device']
+  emb_cfg = config['embedding_model']
+  model_name = emb_cfg['name']
   base_embeddings = HuggingFaceEmbeddings(
       model_name=model_name,
-      model_kwargs={'device': device},
+      model_kwargs=huggingface_embedding_model_kwargs(emb_cfg),
       encode_kwargs={'normalize_embeddings': True}
   )
   embeddings_for_query = E5QueryEmbeddings(
@@ -31,7 +44,7 @@ def create_qdrant_retriever(
 
   hyde_cfg = config.get("hyde") or {}
   if hyde_llm is not None:
-    print("Включён HyDE для dense-поиска (Qdrant hybrid)...")
+    logger.info("HyDE включён для dense Qdrant")
     embeddings_for_query = HyDEQueryEmbeddings(
       embeddings_for_query,
       hyde_llm,
@@ -48,6 +61,12 @@ def create_qdrant_retriever(
   port = qdrant_config.get('port', 6333)
 
   client = QdrantClient(host=host, port=port)
+  logger.info(
+      "Qdrant клиент: %s:%s коллекция=%s",
+      host,
+      port,
+      qdrant_config['collection_name'],
+  )
 
   # 4. Инициализация Hybrid Store
   # vector_name/sparse_vector_name должны совпадать с именами, использованными при индексации

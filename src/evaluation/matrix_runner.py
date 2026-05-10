@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import os
 import re
 from argparse import Namespace
@@ -14,6 +15,8 @@ from typing import Any, Dict, List, Optional
 
 from src.di_containers import Container
 from src.evaluation.runner import EvaluationPause, TestPipelineRunner
+
+logger = logging.getLogger(__name__)
 
 MatrixScenario = Dict[str, Any]
 
@@ -88,7 +91,7 @@ def manage_db_state_for_test(config_data: dict, force_reindex: bool) -> bool:
   if force_reindex:
     if exists:
       import shutil
-      print(f"♻️  [MATRIX] Удаление старых индексов: {db_path}...")
+      logger.info("[MATRIX] Удаление старых индексов: %s", db_path)
       try:
         shutil.rmtree(db_path)
         if os.path.isfile(bm25_path):
@@ -97,9 +100,9 @@ def manage_db_state_for_test(config_data: dict, force_reindex: bool) -> bool:
         raise SystemExit(f"❌ Ошибка: Файлы БД заняты. {e}") from e
     return True
   if not exists:
-    print(f"⚠️ [MATRIX] Индексы не найдены. Требуется создание.")
+    logger.warning("[MATRIX] Индексы не найдены, будет создание.")
     return True
-  print(f"✅ [MATRIX] Найдены существующие индексы: {db_path}")
+  logger.info("[MATRIX] Найдены существующие индексы: %s", db_path)
   return False
 
 
@@ -158,7 +161,7 @@ async def run_matrix(base_config: dict, args: Namespace) -> None:
     )
 
     if entry.get("status") == "done":
-      print(f"⏭  Сценарий «{name}» уже выполнен — пропуск.")
+      logger.info("Сценарий «%s» уже выполнен — пропуск.", name)
       continue
 
     chunker = str(scenario.get("chunker", "markdown"))
@@ -224,7 +227,9 @@ async def run_matrix(base_config: dict, args: Namespace) -> None:
         ),
     )
 
-    print(f"\n{'=' * 60}\n▶ Матрица: сценарий «{name}» (chunker={chunker})\n{'=' * 60}")
+    logger.info("%s", "=" * 60)
+    logger.info("Матрица: сценарий «%s» (chunker=%s)", name, chunker)
+    logger.info("%s", "=" * 60)
     results, pause = await runner.run(run_args)
 
     if pause is not None:
@@ -241,9 +246,10 @@ async def run_matrix(base_config: dict, args: Namespace) -> None:
       elif pause.phase == "questions":
         entry["dialog_session_id"] = None
       save_checkpoint(cp_path, checkpoint)
-      print(
-          f"\n⏸ Матрица остановлена (пауза). Чекпоинт: {cp_path}\n"
-          f"   Продолжить: python main.py test-matrix --resume\n"
+      logger.warning(
+          "Матрица остановлена (пауза). Чекпоинт: %s. "
+          "Продолжить: python main.py test-matrix --resume",
+          cp_path,
       )
       return
 
@@ -253,4 +259,4 @@ async def run_matrix(base_config: dict, args: Namespace) -> None:
     entry["dialog_session_id"] = None
     save_checkpoint(cp_path, checkpoint)
 
-  print(f"\n✅ Матрица сценариев завершена. Чекпоинт: {cp_path}")
+  logger.info("Матрица сценариев завершена. Чекпоинт: %s", cp_path)

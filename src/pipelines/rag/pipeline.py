@@ -1,3 +1,8 @@
+"""RAG pipeline: LLM из конфига, retrieval, история чата, сборка LCEL-цепочек.
+
+Основной сценарий для бота — create_rag_chain + RunnableWithMessageHistory
+и ReadOnlyPostgresHistory для подгрузки диалога из БД.
+"""
 import logging
 import os
 import time
@@ -59,6 +64,13 @@ qa_prompt = ChatPromptTemplate.from_messages([
     ("human", "{input}"),
 ])
 
+CHAT_ONLY_SMALLTALK_SYSTEM = """Ты — дружелюбный ассистент ФПМИ БГУ в Telegram. Отвечай по-русски, кратко и естественно.
+Опирайся на историю диалога: продолжай тему, используй факты, которые пользователь уже видел в этой беседе (например посчитай разницу лет, если год основания или другая дата уже обсуждались).
+Не придумывай новые конкретные факты о факультете (имена, даты с сайта), если их не было в переписке — тогда предложи задать отдельный вопрос про факультет, чтобы подключился поиск по базе знаний."""
+
+CHAT_ONLY_DIRECT_SYSTEM = """Ты — ассистент ФПМИ БГУ. Пользователь просит ссылку или где что посмотреть.
+Учитывай историю диалога. Официальный сайт: https://fpmi.bsu.by — кратко направь к разделам (расписание, новости, поступление). Если ссылку уже давали — ответ можно короче."""
+
 PROMPT_TEMPLATE = """
 Ты — официальный ассистент ФПМИ БГУ. Отвечай ТОЛЬКО на основе контекста ниже.
 
@@ -79,6 +91,10 @@ def create_retrieval_chain_test(config: dict, retriever: BaseRetriever) -> Runna
     return RunnableLambda(lambda q: retriever.invoke(q))
 
 def get_llm_from_config(provider_config: dict):
+    """Строит инстанс LLM по YAML-блоку провайдера (ollama / yandex_gpt).
+
+    URL Ollama и секрет Yandex при необходимости читаются из окружения.
+    """
     if not isinstance(provider_config, dict):
         provider_config = dict(provider_config)
     provider_type = provider_config.get("type")
@@ -107,18 +123,19 @@ def create_final_retriever(
     reranker: Optional[BaseDocumentCompressor] = None,
     config: Optional[dict] = None,
 ) -> BaseRetriever:
-    """
-    Оборачивает базовый поиск в реранкер (если он передан).
-    Sprint 4: при включённом stage_timing логирует длительности retrieval / reranker.
+    """Сборка финального ретривера: базовый поиск ± ContextualCompression (reranker).
+
+    Шаги: (1) проверить включён ли stage_timing; (2) без reranker — optional timed wrapper;
+    (3) с reranker — обёртка compressor+retriever (с таймингом или без).
     """
     timing = stage_timing_logs_enabled(config)
     if not reranker:
-        print("✅ Используется базовый поиск (без переранжирования).")
+        logger.info("Финальный ретривер: без реранкера, только базовый поиск")
         if timing:
             return TimedRetrievalOnlyRetriever(base_retriever=base_retriever)
         return base_retriever
 
-    print("✅ Reranker успешно подключен к пайплайну.")
+    logger.info("Финальный ретривер: с реранкером (ContextualCompression)")
     if timing:
         return TimedContextualCompressionRetriever(
             base_compressor=reranker,
@@ -135,7 +152,10 @@ def _create_history_aware_retriever_with_timing(
     retriever: BaseRetriever,
     prompt: Any,
 ) -> Any:
-    """Эквивалент create_history_aware_retriever + явные [TIMING] для reformulation (Sprint 4)."""
+    """Ветка history-aware при наличии истории; иначе прямой retriever + лог reformulation skipped.
+
+    Шаги: собрать reformulate chain → RunnableBranch по пустой/непустой chat_history.
+    """
     reformulate_chain = prompt | llm | StrOutputParser()
 
     def _log_skip_reformulation(x: dict) -> str:
@@ -176,13 +196,13 @@ def _create_history_aware_retriever_with_timing(
 # --- ЦЕПОЧКИ ---
 
 def create_search_only_chain(config: dict, retriever: BaseRetriever) -> Runnable:
-    """Только поиск документов (используется в тестах)."""
+    """Цепочка только retrieval: синхронный invoke ретривера по строке запроса."""
     return RunnableLambda(lambda q: retriever.invoke(q))
 
 def create_generation_chain(config: dict) -> Runnable:
-    """
-    Только генерация.
-    Принимает dict: {"context": str, "question": str}
+    """Генерация ответа только по переданному context + question (без retrieval).
+
+    Выбирает LLM через env LLM_PROVIDER и блок providers в config.
     """
     provider_name = os.getenv("LLM_PROVIDER", "ollama")
     provider_config = config.get('providers', {}).get(provider_name)
@@ -198,7 +218,16 @@ def create_rag_chain(
     session_repo: Any = None,
     summarizer: Any = None,
 ):
-    """Полный Conversational RAG (для бота)."""
+    """Собирает conversational RAG: history-aware retrieve → stuff documents → ответ.
+
+    Шаги: (1) LLM для reformulation/answer из LLM_PROVIDER + config.providers;
+    (2) history-aware или ветка без reformulation при пустой истории;
+    (3) обёртка RunnableWithMessageHistory с историей из БД через get_session_history.
+    """
+    logger.info(
+        "Сборка RAG-цепочки: LLM_PROVIDER=%s",
+        os.getenv("LLM_PROVIDER", "ollama"),
+    )
     provider_name = os.getenv("LLM_PROVIDER", "ollama")
     provider_config = config.get('providers', {}).get(provider_name)
     llm = get_llm_from_config(provider_config)
@@ -276,5 +305,60 @@ def create_rag_chain(
         output_messages_key="answer",
     )
 
-    print("✅ Полная Conversational RAG-цепочка создана.")
+    logger.info("RAG-цепочка готова: RunnableWithMessageHistory подключён")
     return conversational_rag_chain
+
+
+def _inject_non_rag_system_prompt(input_dict: dict) -> dict:
+  """Убирает служебный non_rag_label, подставляет system_prompt для chat-only ветки."""
+  label = input_dict.get("non_rag_label") or "smalltalk"
+  system = (
+      CHAT_ONLY_DIRECT_SYSTEM if label == "direct_link" else CHAT_ONLY_SMALLTALK_SYSTEM
+  )
+  out = {k: v for k, v in input_dict.items() if k != "non_rag_label"}
+  out["system_prompt"] = system
+  return out
+
+
+def create_chat_only_chain(
+    config: dict,
+    answer_repo: Any,
+    session_repo: Any = None,
+    summarizer: Any = None,
+):
+  """Диалог с тем же PostgresHistory/summary, что и RAG, но без retrieval по документам."""
+  provider_name = os.getenv("LLM_PROVIDER", "ollama")
+  provider_config = config.get("providers", {}).get(provider_name)
+  llm = get_llm_from_config(provider_config)
+
+  chat_prompt = ChatPromptTemplate.from_messages([
+      ("system", "{system_prompt}"),
+      MessagesPlaceholder("chat_history"),
+      ("human", "{input}"),
+  ])
+  llm_branch = chat_prompt | llm | StrOutputParser()
+  core = (
+      RunnableLambda(_inject_non_rag_system_prompt)
+      | RunnablePassthrough.assign(answer=llm_branch)
+  )
+
+  mem = config.get("memory") or {}
+
+  def get_session_history(session_id: str):
+    return ReadOnlyPostgresHistory(
+        session_id=session_id,
+        answer_repo=answer_repo,
+        session_repo=session_repo,
+        summarizer=summarizer,
+        window_size=int(mem.get("window_size", 5)),
+        summarization_threshold=int(mem.get("summarization_threshold", 4)),
+        memory_enabled=bool(mem.get("enabled", False)),
+    )
+
+  return RunnableWithMessageHistory(
+      core,
+      get_session_history,
+      input_messages_key="input",
+      history_messages_key="chat_history",
+      output_messages_key="answer",
+  )

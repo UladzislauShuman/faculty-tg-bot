@@ -1,6 +1,10 @@
-from typing import List, Dict, Any
-from bs4 import BeautifulSoup, Tag, NavigableString
+"""Element-based HTML chunking: стек заголовков, агрегация текста, таблицы построчно."""
+
+from typing import Any, Dict, List
+
+from bs4 import BeautifulSoup, Tag
 from langchain_core.documents import Document
+
 from src.interfaces.chunker_interfaces import ChunkerInterface
 
 

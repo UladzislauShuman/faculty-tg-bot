@@ -1,38 +1,84 @@
+"""Оффлайн-индексация: сбор URL, чанкинг, запись Chroma+BM25 или Qdrant hybrid.
+
+Точка входа — run_indexing; ветка хранилища задаётся config.retrievers.active_type.
+"""
+import hashlib
+import json
+import logging
 import os
 import pickle
 import textwrap
-import hashlib
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
-from langchain_qdrant import QdrantVectorStore, FastEmbedSparse, RetrievalMode
-from qdrant_client import QdrantClient
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 
 from src.interfaces.data_processor_interfaces import DataSourceProcessor
 from src.pipelines.indexing.crawlers.website_crawler import WebsiteCrawler
+from src.util.hf_embeddings import huggingface_embedding_model_kwargs
 from src.util.yaml_parser import TestSetLoader
+
+logger = logging.getLogger(__name__)
+
+
+def configure_indexing_loggers() -> None:
+  """Поднимает уровень до INFO для этапов индексации (см. RAG_INDEX_LOGS).
+
+  После замены print() на logging без этого не было видно логов
+  ``ConfigurableProcessor`` / чанкеров (пакет ``src.parsing_and_chunking``).
+  """
+  if os.environ.get("RAG_INDEX_LOGS", "1").lower() in ("0", "false", "no"):
+    return
+  for name in (
+      "src.pipelines.indexing.pipeline",
+      "src.pipelines.indexing.crawlers.website_crawler",
+      "src.parsing_and_chunking",
+  ):
+    logging.getLogger(name).setLevel(logging.INFO)
 
 
 # --- ВСПОМОГАТЕЛЬНЫЕ УТИЛИТЫ ---
 
 def _prepare_embeddings(config: Dict[str, Any]):
-  """Инициализация модели эмбеддингов с общими параметрами."""
-  model_name = config['embedding_model']['name']
-  device = config['embedding_model']['device']
-  return HuggingFaceEmbeddings(
-      model_name=model_name,
-      model_kwargs={'device': device},
-      encode_kwargs={'normalize_embeddings': True}
-  )
+  """Создаёт HuggingFaceEmbeddings по имени модели и device из config.embedding_model."""
+  emb_cfg = config['embedding_model']
+  model_name = emb_cfg['name']
+  hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+  cache_model_dir = os.path.join(hf_home, "hub", f"models--{model_name.replace('/', '--')}")
+  try:
+    emb = HuggingFaceEmbeddings(
+        model_name=model_name,
+        model_kwargs=huggingface_embedding_model_kwargs(emb_cfg),
+        encode_kwargs={'normalize_embeddings': True},
+    )
+    logger.info("Модель эмбеддингов загружена: %s", model_name)
+    return emb
+  except (FileNotFoundError, OSError, json.JSONDecodeError) as e:
+    extra = ""
+    if isinstance(e, json.JSONDecodeError):
+      extra = " Похоже на битый JSON в кеше (часто tokenizer_config.json после обрыва загрузки)."
+    offline = bool(emb_cfg.get("local_files_only", False))
+    hint = (
+        f"Не удалось загрузить эмбеддинг-модель {model_name!r} ({e!s}).{extra} "
+        "Частые причины: нет DNS/интернета или прерванная загрузка (битый кеш). "
+        f"Проверьте сеть из контейнера; при необходимости удалите каталог "
+        f"{cache_model_dir} и повторите индексацию."
+    )
+    if offline:
+      hint += (
+          " С embedding_model.local_files_only=true модель должна быть полностью "
+          "в HF-кеше; иначе временно выставьте local_files_only: false."
+      )
+    logger.error("%s", hint)
+    raise RuntimeError(hint) from e
 
 
 def _apply_e5_passage_prefix(chunks: List[Document], model_name: str) -> List[
   Document]:
   """
-  Добавляет префикс 'passage: ' к контенту чанков, если используется модель E5.
-  Это критически важно для качества векторного поиска.
+  Для E5 к тексту чанка добавляется префикс passage: (согласовано с запросами query:).
   """
   if "e5" in model_name:
     return [
@@ -46,7 +92,7 @@ def _apply_e5_passage_prefix(chunks: List[Document], model_name: str) -> List[
 
 
 def _save_chunks_to_file(chunks: List[Document], config: Dict[str, Any]):
-  """Сохраняет отформатированный список чанков в текстовый файл для отладки."""
+  """Пишет человекочитаемый дамп чанков в paths.output_dir + paths.indexing."""
   output_dir = config['paths']['output_dir']
   output_filename = config['paths']['indexing']
   output_file_path = os.path.join(output_dir, output_filename)
@@ -62,26 +108,26 @@ def _save_chunks_to_file(chunks: List[Document], config: Dict[str, Any]):
       wrapped_text = textwrap.fill(chunk.page_content, width=100)
       f.write(wrapped_text)
       f.write("\n\n" + "=" * 80 + "\n\n")
-  print(f"✅ Все чанки сохранены в файл для анализа: {output_file_path}")
+  logger.info("Дамп чанков записан: %s (%s шт.)", output_file_path, len(chunks))
 
 
 # --- РЕАЛИЗАЦИИ ИНДЕКСАЦИИ (STORAGE SPECIFIC) ---
 
 def _index_chroma_bm25(chunks: List[Document], config: Dict[str, Any]):
-  """Логика индексации для связки ChromaDB + BM25 (Pickle)."""
+  """BM25 pickle + векторизация в Chroma по тем же чанкам."""
 
   # 1. Подготовка документов для BM25
-  print("Сохранение документов для BM25 индекса...")
+  logger.info("BM25: сохранение списка документов в pickle")
   bm25_index_path = config['retrievers']['bm25']['index_path']
   os.makedirs(os.path.dirname(bm25_index_path), exist_ok=True)
   with open(bm25_index_path, "wb") as f:
     # Сохраняем только документы. Индекс построится при инициализации ретривера.
     pickle.dump({'docs': chunks}, f)
-  print(f"✅ Документы для BM25 сохранены в {bm25_index_path}")
+  logger.info("BM25 pickle готов: %s", bm25_index_path)
 
   # 2. Индексация в ChromaDB
-  print("Создание векторной базы данных ChromaDB...")
   db_dir = config['retrievers']['vector_store']['db_path']
+  logger.info("Chroma: векторизация и persist в %s", db_dir)
   embeddings_model = _prepare_embeddings(config)
 
   # Применяем префиксы E5 перед векторизацией
@@ -93,10 +139,11 @@ def _index_chroma_bm25(chunks: List[Document], config: Dict[str, Any]):
       embedding=embeddings_model,
       persist_directory=db_dir
   )
-  print(f"✅ Векторная база данных Chroma сохранена в {db_dir}")
+  logger.info("Chroma индекс записан: %s", db_dir)
 
 def _index_qdrant(chunks: List[Document], config: Dict[str, Any]):
-  print("Создание Hybrid индекса в Qdrant (Dense + Sparse)...")
+  """Hybrid Qdrant: dense (HF) + sparse (FastEmbed); коллекция пересоздаётся."""
+  logger.info("Qdrant: hybrid индексация (dense+sparse)")
   qdrant_config = config['retrievers']['qdrant']
   host = os.getenv("QDRANT_HOST", qdrant_config.get('host', 'localhost'))
   port = qdrant_config.get('port', 6333)
@@ -123,28 +170,29 @@ def _index_qdrant(chunks: List[Document], config: Dict[str, Any]):
       sparse_vector_name="sparse",
       force_recreate=True,
   )
-  print(f"✅ Гибридная коллекция {collection_name} создана.")
+  logger.info("Qdrant коллекция готова: %s @ %s:%s", collection_name, host, port)
 
 
 # --- ОСНОВНОЙ ПАЙПЛАЙН ---
 
 def run_indexing(config: dict, processor: DataSourceProcessor, mode: str):
+  """Оркестратор: URL из test/full → чанки → parent docstore → дамп → Chroma или Qdrant.
+
+  mode: 'test' — URL из qa-test-set; 'full' — краулер с data_source.
   """
-  Главная функция запуска процесса индексации.
-  Оркестрирует сбор данных, чанкинг и выбор хранилища.
-  """
+  configure_indexing_loggers()
   urls_to_process = []
 
   # 1. Определение списка URL
   if mode == 'test':
-    print("--- Режим 'test': загрузка URL из qa-test-set.yaml ---")
+    logger.info("Индексация: режим test, читаем URL из qa-test-set")
     loader = TestSetLoader(config['paths']['qa_test_set'])
     urls_to_process = loader.get_test_urls()
     if not urls_to_process:
-      print("❌ Ошибка: В qa-test-set.yaml нет активных URL для индексации.")
+      logger.error("В qa-test-set.yaml нет активных URL для индексации")
       return
   elif mode == 'full':
-    print("--- Режим 'full': запуск полного обхода сайта ---")
+    logger.info("Индексация: режим full, краулер с %s", config['data_source']['url'])
     base_url = config['data_source']['url']
     max_depth = config['data_source'].get('max_depth', 2)
     crawler = WebsiteCrawler(base_url=base_url, max_depth=max_depth)
@@ -163,11 +211,14 @@ def run_indexing(config: dict, processor: DataSourceProcessor, mode: str):
       all_chunks.extend(chunks_from_url)
 
   if not all_chunks:
-    print("⚠️ Нет чанков для индексации. Процесс остановлен.")
+    logger.warning("Нет чанков для индексации — выход")
     return
 
-  print(
-    f"\n✅ Обработка источников завершена. Получено {len(all_chunks)} чанков (и {len(all_parents)} родителей).")
+  logger.info(
+      "Обработка источников завершена: чанков=%s, родителей=%s",
+      len(all_chunks),
+      len(all_parents),
+  )
 
   # 2.5 Сохранение родителей (если включен Parent Document Retrieval)
   parent_config = config.get('parent_document', {})
@@ -184,10 +235,10 @@ def run_indexing(config: dict, processor: DataSourceProcessor, mode: str):
         
     with open(docstore_path, "wb") as f:
       pickle.dump(docstore, f)
-    print(f"✅ Сохранено {len(docstore)} родительских документов в {docstore_path}")
+    logger.info("Parent docstore: %s записей → %s", len(docstore), docstore_path)
 
   # 3. Генерация уникальных ID (для дедупликации и отслеживания)
-  print("Генерация уникальных ID для каждого чанка...")
+  logger.debug("Генерация chunk_id (md5) для каждого чанка")
   for doc in all_chunks:
     unique_string = f"{doc.metadata['source']}{doc.page_content}"
     chunk_id = hashlib.md5(unique_string.encode('utf-8')).hexdigest()
@@ -198,14 +249,14 @@ def run_indexing(config: dict, processor: DataSourceProcessor, mode: str):
 
   # 5. Маршрутизация в выбранное хранилище
   active_retriever_type = config['retrievers'].get('active_type', 'chroma_bm25')
+  logger.info("Запись индекса: active_type=%s", active_retriever_type)
 
   if active_retriever_type == 'chroma_bm25':
     _index_chroma_bm25(all_chunks, config)
   elif active_retriever_type == 'qdrant':
     _index_qdrant(all_chunks, config)
   else:
-    print(
-      f"❌ Ошибка: Неизвестный тип ретривера в конфиге: {active_retriever_type}")
+    logger.error("Неизвестный retrievers.active_type: %s", active_retriever_type)
     return
 
-  print("\n🎉 Индексация успешно завершена!")
+  logger.info("Индексация успешно завершена")

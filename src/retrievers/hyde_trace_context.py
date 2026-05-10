@@ -1,4 +1,8 @@
-"""Контекст для связки событий HyDE с трассировкой evaluation (контур ContextVar для async/to_thread)."""
+"""Буфер событий HyDE для trace evaluation: ``ContextVar`` изолирует контура async и ``to_thread``.
+
+Пары ``hyde_trace_begin`` / ``hyde_trace_end`` задают область; без активного буфера
+``hyde_trace_append`` ничего не делает.
+"""
 
 from __future__ import annotations
 

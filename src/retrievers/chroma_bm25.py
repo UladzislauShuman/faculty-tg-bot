@@ -1,30 +1,46 @@
+"""Гибридный ретривер: Chroma (dense) + BM25 (sparse), RRF через AsyncEnsembleRetriever.
+
+Опционально HyDE оборачивает только dense-эмбеддинги запроса; BM25 идёт по исходному тексту.
+"""
+import logging
 import os
 import pickle
 from typing import Optional
 
+from langchain_chroma import Chroma
+from langchain_community.retrievers import BM25Retriever
 from langchain_core.language_models import BaseLanguageModel
 from langchain_core.retrievers import BaseRetriever
-from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+
 from src.retrievers.async_ensemble_retriever import AsyncEnsembleRetriever
-from langchain_community.retrievers import BM25Retriever
+from src.util.hf_embeddings import huggingface_embedding_model_kwargs
+from src.util.text_processing import tokenize_for_bm25
 
 from .e5_query_embeddings import E5QueryEmbeddings
 from .hyde_retriever import HyDEQueryEmbeddings
-from src.util.text_processing import tokenize_for_bm25 # <-- ИМПОРТ НАШЕЙ УТИЛИТЫ
+
+logger = logging.getLogger(__name__)
+
 
 def create_chroma_bm25_retriever(
     config: dict,
     hyde_llm: Optional[BaseLanguageModel] = None,
 ) -> BaseRetriever:
-    # --- 1. Инициализация векторного ретривера (ChromaDB) ---
-    print("Инициализация векторного ретривера (ChromaDB)...")
-    model_name = config['embedding_model']['name']
-    device = config['embedding_model']['device']
+    """Собирает ensemble Chroma + BM25.
+
+    Шаги: (1) HF embeddings + E5 query prefix + опционально HyDE;
+    (2) Chroma retriever с k из vector_store;
+    (3) BM25 из pickle, тот же k;
+    (4) Ensemble с весами hybrid_weights.
+    """
+    logger.info("Chroma+BM25: инициализация dense (Chroma)")
+    emb_cfg = config['embedding_model']
+    model_name = emb_cfg['name']
 
     base_embeddings = HuggingFaceEmbeddings(
         model_name=model_name,
-        model_kwargs={'device': device},
+        model_kwargs=huggingface_embedding_model_kwargs(emb_cfg),
         encode_kwargs={'normalize_embeddings': True}
     )
 
@@ -35,7 +51,7 @@ def create_chroma_bm25_retriever(
 
     hyde_cfg = config.get("hyde") or {}
     if hyde_llm is not None:
-        print("Включён HyDE для dense-поиска (Chroma в гибриде Chroma+BM25)...")
+        logger.info("HyDE включён для dense Chroma")
         embeddings_for_query = HyDEQueryEmbeddings(
             embeddings_for_query,
             hyde_llm,
@@ -53,23 +69,22 @@ def create_chroma_bm25_retriever(
         search_kwargs={"k": config['retrievers']['vector_store']['search_k']}
     )
 
-    # --- 2. Инициализация лексического ретривера (BM25) ---
-    print("Инициализация BM25 ретривера (со стеммингом)...")
+    logger.info("Chroma+BM25: загрузка BM25 pickle")
     bm25_index_path = config['retrievers']['bm25']['index_path']
     if not os.path.exists(bm25_index_path):
-        raise FileNotFoundError(f"BM25 индекс не найден: {bm25_index_path}. Запустите индексацию.")
+        raise FileNotFoundError(
+            f"BM25 индекс не найден: {bm25_index_path}. Запустите индексацию."
+        )
 
     with open(bm25_index_path, "rb") as f:
         bm25_data = pickle.load(f)
 
-    # ПЕРЕДАЕМ НАШУ ФУНКЦИЮ ПРЕПРОЦЕССИНГА
     bm25_retriever = BM25Retriever.from_documents(
         documents=bm25_data['docs'],
         preprocess_func=tokenize_for_bm25
     )
     bm25_retriever.k = config['retrievers']['vector_store']['search_k']
 
-    # --- 3. Сборка гибридного ретривера ---
     weights_config = config['retrievers'].get('hybrid_weights', {})
     vector_weight = weights_config.get('vector', 0.7)
     keyword_weight = weights_config.get('keyword', 0.3)
@@ -79,5 +94,10 @@ def create_chroma_bm25_retriever(
         weights=[vector_weight, keyword_weight]
     )
 
-    print(f"✅ Гибридный ретривер (Chroma+BM25) успешно создан. Веса: Вектор={vector_weight}, BM25={keyword_weight}")
+    logger.info(
+        "Chroma+BM25 готов: vector=%.2f keyword=%.2f k=%s",
+        vector_weight,
+        keyword_weight,
+        config['retrievers']['vector_store']['search_k'],
+    )
     return ensemble_retriever

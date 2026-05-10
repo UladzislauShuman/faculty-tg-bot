@@ -1,3 +1,11 @@
+"""Сборка зависимостей: один composition root для бота, RAG, retrieval и eval.
+
+Сюда сводятся фабрики из config.yaml. Точки входа (main, server-startup) создают
+контейнер и подставляют конфиг — бизнес-код не должен инстанцировать сервисы
+вручную.
+"""
+import logging
+
 from dependency_injector import containers, providers
 
 from src.retrievers.chroma_bm25 import create_chroma_bm25_retriever
@@ -7,6 +15,7 @@ from src.retrievers.rerankers import create_reranker
 # Импорты RAG пайплайна
 from src.pipelines.rag.pipeline import (
   create_rag_chain,
+  create_chat_only_chain,
   create_final_retriever,
   create_search_only_chain,
   create_generation_chain,
@@ -33,8 +42,11 @@ from src.tg_bot.services.implementations import UserService, AnswerService, \
   SessionService
 from src.tg_bot.services.summarizer import SummarizerService
 
+logger = logging.getLogger(__name__)
+
 
 def _hyde_llm_from_config(hyde_cfg: object):
+  """Возвращает LLM для HyDE только если в конфиге включён hyde.enabled."""
   if not isinstance(hyde_cfg, dict) or not hyde_cfg.get("enabled", False):
     return None
   llm_cfg = hyde_cfg.get("llm")
@@ -44,15 +56,21 @@ def _hyde_llm_from_config(hyde_cfg: object):
 
 
 def _wrap_with_parent_retriever(base_retriever, parent_cfg):
+  """Оборачивает базовый ретривер в ParentDocumentRetriever при включённом parent_document.
+
+  Шаги: проверить флаг → при необходимости загрузить docstore и вернуть обёртку.
+  """
   if not isinstance(parent_cfg, dict) or not parent_cfg.get("enabled", False):
     return base_retriever
   docstore_path = parent_cfg.get("docstore_path", "data/parent_docstore.pkl")
+  logger.info("Parent document retrieval: обёртка над базовым ретривером, docstore=%s", docstore_path)
   return ParentDocumentRetriever.from_config(
       base_retriever=base_retriever,
       docstore_path=docstore_path
   )
 
 class Container(containers.DeclarativeContainer):
+  """DI-контейнер: конфиг, процессоры, бот, retrieval, цепочки RAG, eval."""
   config = providers.Configuration()
 
   # --- Processors ---
@@ -156,6 +174,14 @@ class Container(containers.DeclarativeContainer):
     answer_repo=bot_answer_repo,
     session_repo=bot_session_repo,
     summarizer=summarizer_service,
+  )
+
+  chat_only_chain = providers.Factory(
+      create_chat_only_chain,
+      config=config,
+      answer_repo=bot_answer_repo,
+      session_repo=bot_session_repo,
+      summarizer=summarizer_service,
   )
 
   semantic_routing_service = providers.Factory(

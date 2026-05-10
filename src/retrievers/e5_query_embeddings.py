@@ -1,12 +1,14 @@
+"""Обёртка Embeddings для E5: к запросу добавляется префикс «query: ».
+
+Префикс «passage: » для индексации задаётся в pipelines/indexing.
+"""
 from typing import List
+
 from langchain_core.embeddings import Embeddings
 
+
 class E5QueryEmbeddings(Embeddings):
-    """
-    Модели семейства E5 требуют префикс "query: " для запросов
-    и "passage: " для документов (добавляется при индексации).
-    Этот класс автоматически добавляет префикс к запросам.
-    """
+    """Делегирует в base; для `embed_query` добавляет префикс E5."""
     def __init__(self, base_embeddings: Embeddings):
         self.base_embeddings = base_embeddings
 

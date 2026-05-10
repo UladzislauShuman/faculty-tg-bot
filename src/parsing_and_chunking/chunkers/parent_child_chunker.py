@@ -1,5 +1,8 @@
-from typing import List, Tuple
+"""Parent/child чанкинг: HTML → markdown-родители по заголовкам, дети — RecursiveCharacterTextSplitter."""
+
+import logging
 import uuid
+from typing import List, Tuple
 
 from bs4 import BeautifulSoup
 from langchain_core.documents import Document
@@ -10,6 +13,8 @@ from langchain_text_splitters import (
 from markdownify import markdownify as md
 
 from src.interfaces.chunker_interfaces import ChunkerInterface
+
+logger = logging.getLogger(__name__)
 
 # Legacy parent strategy (semantic blocks on raw HTML):
 # from src.parsing_and_chunking.chunkers.semantic_html_chunker import SemanticHTMLChunker
@@ -72,9 +77,9 @@ class ParentChildHTMLChunker(ChunkerInterface):
         )
         if not content_block:
             label = source or "(inline html)"
-            print(
-                "  - ⚠️ Предупреждение: не найден основной блок контента "
-                f"(parent-child markdown parents): {label}."
+            logger.warning(
+                "Не найден основной блок контента (parent-child): %s",
+                label,
             )
             return []
 
