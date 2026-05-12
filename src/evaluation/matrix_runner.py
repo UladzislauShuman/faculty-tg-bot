@@ -1,6 +1,9 @@
 """
 Оркестрация матрицы evaluation_scenarios из config.yaml: deep-merge overrides,
 чекпоинт check_points/default_checkpoint.json, пауза через output/pause.flag.
+
+При падении одного сценария (Exception) статус записывается как failed, цикл
+продолжает следующие сценарии; текст ошибки в чекпоинте: scenarios.<name>.error.
 """
 from __future__ import annotations
 
@@ -211,52 +214,77 @@ async def run_matrix(base_config: dict, args: Namespace) -> None:
     entry["status"] = "in_progress"
     save_checkpoint(cp_path, checkpoint)
 
-    container = Container()
-    container.config.from_dict(merged)
+    try:
+      container = Container()
+      container.config.from_dict(merged)
 
-    em = merged.get("evaluation_metrics") or {}
-    use_judge = bool(em.get("enabled", False))
-    runner = TestPipelineRunner(
-        container,
-        merged,
-        faithfulness_evaluator=(
-            container.faithfulness_evaluator() if use_judge else None
-        ),
-        relevance_evaluator=(
-            container.relevance_evaluator() if use_judge else None
-        ),
-    )
-
-    logger.info("%s", "=" * 60)
-    logger.info("Матрица: сценарий «%s» (chunker=%s)", name, chunker)
-    logger.info("%s", "=" * 60)
-    results, pause = await runner.run(run_args)
-
-    if pause is not None:
-      entry["status"] = "paused"
-      entry["partial_results"] = results
-      entry["pause_state"] = {
-          "phase": pause.phase,
-          "block1_next_idx": pause.block1_next_idx,
-          "dialog_scenario_idx": pause.dialog_scenario_idx,
-          "dialog_step_next_idx": pause.dialog_step_next_idx,
-      }
-      if pause.dialog_session_id is not None:
-        entry["dialog_session_id"] = pause.dialog_session_id
-      elif pause.phase == "questions":
-        entry["dialog_session_id"] = None
-      save_checkpoint(cp_path, checkpoint)
-      logger.warning(
-          "Матрица остановлена (пауза). Чекпоинт: %s. "
-          "Продолжить: python main.py test-matrix --resume",
-          cp_path,
+      em = merged.get("evaluation_metrics") or {}
+      use_judge = bool(em.get("enabled", False))
+      runner = TestPipelineRunner(
+          container,
+          merged,
+          faithfulness_evaluator=(
+              container.faithfulness_evaluator() if use_judge else None
+          ),
+          relevance_evaluator=(
+              container.relevance_evaluator() if use_judge else None
+          ),
       )
-      return
 
-    entry["status"] = "done"
-    entry["partial_results"] = []
-    entry["pause_state"] = None
-    entry["dialog_session_id"] = None
-    save_checkpoint(cp_path, checkpoint)
+      logger.info("%s", "=" * 60)
+      logger.info("Матрица: сценарий «%s» (chunker=%s)", name, chunker)
+      logger.info("%s", "=" * 60)
+      results, pause = await runner.run(run_args)
 
-  logger.info("Матрица сценариев завершена. Чекпоинт: %s", cp_path)
+      if pause is not None:
+        entry["status"] = "paused"
+        entry["partial_results"] = results
+        entry["pause_state"] = {
+            "phase": pause.phase,
+            "block1_next_idx": pause.block1_next_idx,
+            "dialog_scenario_idx": pause.dialog_scenario_idx,
+            "dialog_step_next_idx": pause.dialog_step_next_idx,
+        }
+        if pause.dialog_session_id is not None:
+          entry["dialog_session_id"] = pause.dialog_session_id
+        elif pause.phase == "questions":
+          entry["dialog_session_id"] = None
+        save_checkpoint(cp_path, checkpoint)
+        logger.warning(
+            "Матрица остановлена (пауза). Чекпоинт: %s. "
+            "Продолжить: python main.py test-matrix --resume",
+            cp_path,
+        )
+        return
+
+      entry["status"] = "done"
+      entry.pop("error", None)
+      entry["partial_results"] = []
+      entry["pause_state"] = None
+      entry["dialog_session_id"] = None
+      save_checkpoint(cp_path, checkpoint)
+
+    except Exception as exc:
+      logger.exception(
+          "Матрица: сценарий «%s» упал с ошибкой — сохраняем failed и идём дальше",
+          name,
+      )
+      entry["status"] = "failed"
+      entry["error"] = f"{type(exc).__name__}: {exc}"
+      entry["partial_results"] = []
+      entry["pause_state"] = None
+      entry["dialog_session_id"] = None
+      save_checkpoint(cp_path, checkpoint)
+
+  failed_names = [
+      n for n, e in checkpoint["scenarios"].items()
+      if e.get("status") == "failed"
+  ]
+  if failed_names:
+    logger.warning(
+        "Матрица завершена со сбоями в сценариях: %s (см. error в %s)",
+        ", ".join(failed_names),
+        cp_path,
+    )
+  else:
+    logger.info("Матрица сценариев завершена. Чекпоинт: %s", cp_path)
