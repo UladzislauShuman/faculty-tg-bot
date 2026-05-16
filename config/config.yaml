@@ -63,10 +63,10 @@ data_source:
 # -----------------------------------------------------------------------------
 # [смысл] Модель векторизации при индексации и dense-поиске (Chroma/Qdrant dense).
 embedding_model:
-  # [значения] идентификатор на HuggingFace Hub (строка; семейство e5 — нужен префикс query: в коде)
+  # [значения] идентификатор на HuggingFace Hub (строка; семейство e5 — префиксы passage:/query: в коде)
   # [смысл] архитектура эмбеддингов; должна совпадать при индексации и запросах. Смена модели = полная переиндексация.
-  # [откат] intfloat/multilingual-e5-small
-  name: "intfloat/multilingual-e5-large"
+  # [откат] intfloat/multilingual-e5-large | intfloat/multilingual-e5-small
+  name: "BAAI/bge-m3"  # old: "intfloat/multilingual-e5-large"
   # [значения] cpu | cuda | cuda:0 … (зависит от установки PyTorch)
   # [смысл] устройство вычисления эмбеддингов
   device: "cpu"
@@ -137,7 +137,7 @@ retrievers:
     type: "cross_encoder"
     # [значения] HuggingFace id модели cross-encoder
     # [смысл] модель переранжирования кандидатов
-    model: "DiTy/cross-encoder-russian-msmarco"
+    model: "BAAI/bge-reranker-v2-m3"  # old: "DiTy/cross-encoder-russian-msmarco"
     # [значения] целое число ≥ 1 (часто 3–5; больше — богаче контекст, дольше generation)
     # [смысл] сколько документов после реранкера отдаётся в LLM-контекст
     # [откат] 3
@@ -154,7 +154,8 @@ providers:
     type: ollama
     # [значения] имя модели в Ollama (ollama pull …)
     # [смысл] модель основного ответа бота
-    model: "llama3.1"
+    model: "qwen2.5:14b-instruct-q4_K_M"  # old "llama3.1"
+    temperature: 0.1  # old: не задано → дефолт 0.7 в get_llm_from_config
 
   yandex_gpt:
     # [значения] yandex_gpt
@@ -202,8 +203,8 @@ hyde:
     # [значения] ollama | yandex_gpt (как в get_llm_from_config)
     type: "ollama"
     # [значения] имя модели провайдера
-    # [смысл] модель для генерации гипотезы; желательно согласовать с providers при Ollama
-    model: "llama3.1"
+    # [смысл] модель для генерации гипотезы; один образ с основным ответчиком (ollama pull …)
+    model: "qwen2.5:14b-instruct-q4_K_M" # "llama3.1"
     # [значения] float 0.0–2.0 (типично 0–1)
     # [смысл] креативность гипотезы; выше — больше разброс текста
     temperature: 0.7
@@ -238,12 +239,12 @@ memory:
     # [значения] ollama | yandex_gpt
     type: "ollama"
     # [значения] имя модели
-    model: "llama3.1"
+    model: "qwen2.5:14b-instruct-q4_K_M" # "llama3.1"
     # [значения] float; 0 — детерминированнее
     temperature: 0.0
   # [значения] секунды
   # [смысл] таймаут на вызов суммаризации (обычно ≥ generation)
-  summary_timeout_seconds: 90
+  summary_timeout_seconds: 300
 
 # -----------------------------------------------------------------------------
 # Раздел J — Семантический роутинг в Telegram (semantic_routing)
@@ -270,8 +271,8 @@ semantic_routing:
   llm:
     # [значения] ollama | yandex_gpt
     type: ollama
-    # [значения] имя модели (лучше лёгкая/та же, что доступна локально)
-    model: llama3.1
+    # [значения] имя модели (та же, что providers.ollama — один pull)
+    model: "qwen2.5:14b-instruct-q4_K_M" # "llama3.1"
     # [значения] float; 0 для стабильной классификации
     temperature: 0.0
 
@@ -309,7 +310,7 @@ evaluation_metrics:
     # [значения] ollama | yandex_gpt
     type: "ollama"
     # [значения] имя модели (должна быть доступна, например ollama pull)
-    model: "llama3.1"
+    model: "qwen2.5:14b-instruct-q4_K_M"  # "llama3.1"
     # [значения] float; 0.0 — повторяемые оценки
     temperature: 0.0
   metrics:
