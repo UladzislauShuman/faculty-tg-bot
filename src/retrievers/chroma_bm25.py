@@ -44,7 +44,7 @@ def create_chroma_bm25_retriever(
         encode_kwargs={'normalize_embeddings': True}
     )
 
-    if "e5" in model_name:
+    if "e5" in model_name.lower():
         embeddings_for_query = E5QueryEmbeddings(base_embeddings)
     else:
         embeddings_for_query = base_embeddings

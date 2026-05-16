@@ -70,6 +70,9 @@ echo -e "      ${GREEN}✓ База данных готова.${NC}\n"
 
 # --- Шаг 2: Главное меню ---
 echo -e "${CYAN}Выберите способ запуска тестов:${NC}"
+echo -e "  ${GREEN}0)${NC} Как в ${CYAN}config/config.yaml${NC}: режим ${YELLOW}all${NC} + ${YELLOW}--force-index${NC}"
+echo -e "     Chunker — ${CYAN}indexing.chunker${NC}; ${CYAN}retrievers.active_type${NC}, память, HyDE — из yaml (без флагов из скрипта)."
+echo -e "     ${YELLOW}--retriever${NC} и ${YELLOW}--index-mode${NC}: дефолты CLI (hybrid, test), см. ${CYAN}main.py test${NC}."
 echo -e "  ${GREEN}1)${NC} Быстрый запуск (Дефолтный сценарий Владислава)"
 echo -e "     ${YELLOW}[all, markdown, hybrid, test, force-index, chroma_bm25, summary_window]${NC}"
 echo -e "     HyDE (опционально): задайте ${CYAN}RAG_HYDE=on${NC} или ${CYAN}RAG_HYDE=off${NC} перед запуском; иначе — как в config.yaml"
@@ -78,10 +81,20 @@ echo -e "  ${GREEN}2)${NC} Интерактивная настройка (Выб
 echo -e "  ${GREEN}3)${NC} Матрица сценариев из config.yaml (python main.py test-matrix)"
 echo -e "  ${GREEN}4)${NC} Продолжить матрицу после паузы (python main.py test-matrix --resume)"
 echo -e "  ${GREEN}5)${NC} Выход"
-read -p "Ваш выбор [1-5]: " MENU_CHOICE
+read -p "Ваш выбор [0-5]: " MENU_CHOICE
 
 if [ "$MENU_CHOICE" == "5" ]; then
     echo "Выход."
+    exit 0
+fi
+
+if [ "$MENU_CHOICE" == "0" ]; then
+    echo -e "\n${CYAN}=========================================${NC}"
+    echo -e "${GREEN}Запуск:${NC} ${YELLOW}main.py test all --force-index${NC} (остальное — из config.yaml, chunker из indexing.chunker)"
+    echo -e "${CYAN}=========================================${NC}\n"
+    docker-compose exec rag-cli python main.py test all --force-index
+    echo -e "\n${GREEN}✅ Тестирование завершено!${NC}"
+    echo -e "Подробные логи и результаты сохранены в папке ${YELLOW}output/${NC}."
     exit 0
 fi
 

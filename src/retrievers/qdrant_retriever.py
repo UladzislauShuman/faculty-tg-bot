@@ -40,7 +40,7 @@ def create_qdrant_retriever(
       encode_kwargs={'normalize_embeddings': True}
   )
   embeddings_for_query = E5QueryEmbeddings(
-    base_embeddings) if "e5" in model_name else base_embeddings
+    base_embeddings) if "e5" in model_name.lower() else base_embeddings
 
   hyde_cfg = config.get("hyde") or {}
   if hyde_llm is not None:

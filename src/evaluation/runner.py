@@ -16,7 +16,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.evaluation.schemas import EvalScore
-from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
+from src.evaluation.metrics import (
+    FaithfulnessEvaluator,
+    ReferenceSimilarityEvaluator,
+    RelevanceEvaluator,
+)
 from src.retrievers.hyde_trace_context import hyde_trace_begin, hyde_trace_end
 from src.util.yaml_parser import TestSetLoader
 
@@ -48,6 +52,7 @@ class TestPipelineRunner:
     config: Dict,
     faithfulness_evaluator: Optional[FaithfulnessEvaluator] = None,
     relevance_evaluator: Optional[RelevanceEvaluator] = None,
+    reference_similarity_evaluator: Optional[ReferenceSimilarityEvaluator] = None,
   ) -> None:
     self.container = container
     self.config = config
@@ -60,6 +65,9 @@ class TestPipelineRunner:
     )
     self.relevance_evaluator: Optional[RelevanceEvaluator] = (
         relevance_evaluator
+    )
+    self.reference_similarity_evaluator: Optional[ReferenceSimilarityEvaluator] = (
+        reference_similarity_evaluator
     )
 
   def _hyde_trace_enabled_for_run(self) -> bool:
@@ -152,12 +160,14 @@ class TestPipelineRunner:
     question: str,
     answer: str,
     full_context: str,
-  ) -> Tuple[Optional[EvalScore], Optional[EvalScore]]:
+    reference_answer: Optional[str] = None,
+  ) -> Tuple[Optional[EvalScore], Optional[EvalScore], Optional[EvalScore]]:
     """Последовательные LLM-вызовы судьи (экономия RAM)."""
     em = self.config.get("evaluation_metrics") or {}
     mflags = em.get("metrics") or {}
     faith_score: Optional[EvalScore] = None
     rel_score: Optional[EvalScore] = None
+    sim_score: Optional[EvalScore] = None
     if self.faithfulness_evaluator and mflags.get("faithfulness", True):
       faith_score = await self.faithfulness_evaluator.aevaluate(
           answer=answer, context=full_context
@@ -166,20 +176,18 @@ class TestPipelineRunner:
       rel_score = await self.relevance_evaluator.aevaluate(
           question=question, answer=answer
       )
-    return faith_score, rel_score
-
-  @staticmethod
-  def _aggregate_judge_score(
-    faith: Optional[EvalScore],
-    rel: Optional[EvalScore],
-  ) -> float:
-    if faith and rel:
-      return (faith.score + rel.score) / 2.0
-    if faith:
-      return float(faith.score)
-    if rel:
-      return float(rel.score)
-    return 0.0
+    ref_clean = (reference_answer or "").strip()
+    if (
+        self.reference_similarity_evaluator
+        and mflags.get("similarity", False)
+        and ref_clean
+    ):
+      sim_score = await self.reference_similarity_evaluator.aevaluate(
+          question=question,
+          reference_answer=reference_answer or "",
+          answer=answer,
+      )
+    return faith_score, rel_score, sim_score
 
   def _build_full_context_from_docs(
     self, docs: list, max_chars: int = MAX_CONTEXT_CHARS
@@ -215,11 +223,11 @@ class TestPipelineRunner:
       qa: Dict,
       docs,
       answer: str,
-      score: float,
       latency: float,
       hit: int,
       faithfulness: Optional[EvalScore] = None,
       relevance: Optional[EvalScore] = None,
+      reference_similarity: Optional[EvalScore] = None,
       hyde_trace: Optional[List[Dict[str, Any]]] = None,
   ) -> None:
     """Пишет лог в файл в реальном времени."""
@@ -238,7 +246,7 @@ class TestPipelineRunner:
     file_handle.write(f"### 📏 Оценка\n")
     file_handle.write(f"- **Эталон:** {qa['answer']}\n")
     file_handle.write(
-        f"- **Метрики:** {icon} | Score: **{score:.4f}** | Time: {latency:.2f}s\n"
+        f"- **Метрики:** {icon} | Time: {latency:.2f}s\n"
     )
     if faithfulness is not None:
       file_handle.write(
@@ -247,6 +255,11 @@ class TestPipelineRunner:
     if relevance is not None:
       file_handle.write(
           f"- **Relevance:** {relevance.score:.2f} — {relevance.reason}\n"
+      )
+    if reference_similarity is not None:
+      file_handle.write(
+          f"- **Similarity (LLM ↔ эталон):** "
+          f"{reference_similarity.score:.2f} — {reference_similarity.reason}\n"
       )
     file_handle.write("\n---\n\n")
     file_handle.flush()
@@ -267,14 +280,12 @@ class TestPipelineRunner:
       )
       f.write("## 📈 Сводные метрики\n")
       f.write(f"- **Hit Rate:** {avg_metrics['hit']:.2%}\n")
-      f.write(
-          f"- **Score (judge, среднее по шагам):** {avg_metrics['sim']:.4f}\n"
-      )
       f.write(f"- **Средняя задержка (latency):** {avg_metrics['lat']:.2f}s\n")
 
       rows_f = [r for r in results if r.get("faithfulness") is not None]
       rows_r = [r for r in results if r.get("relevance") is not None]
-      if rows_f or rows_r:
+      rows_s = [r for r in results if r.get("similarity") is not None]
+      if rows_f or rows_r or rows_s:
         f.write("\n### LLM-as-a-Judge (по шагам с оценкой)\n")
         if rows_f:
           avg_faith = sum(r["faithfulness"] for r in rows_f) / len(rows_f)
@@ -282,8 +293,15 @@ class TestPipelineRunner:
         if rows_r:
           avg_rel = sum(r["relevance"] for r in rows_r) / len(rows_r)
           f.write(f"- **Avg Relevance:** {avg_rel:.4f} _(n={len(rows_r)})_\n")
+        if rows_s:
+          avg_sim = sum(r["similarity"] for r in rows_s) / len(rows_s)
+          f.write(
+              f"- **Avg Similarity (LLM ↔ эталон):** {avg_sim:.4f} "
+              f"_(n={len(rows_s)})_\n"
+          )
         f.write(
-            "\n*Faithfulness = опора ответа на retrieved-контекст; Relevance = соответствие вопросу.*\n"
+            "\n*Faithfulness = опора на retrieved-контекст; Relevance = соответствие вопросу; "
+            "Similarity = согласованность ответа бота с эталонным ответом из qa-set (LLM-judge).*\n"
         )
       f.write("\n---\n\n")
 
@@ -294,17 +312,19 @@ class TestPipelineRunner:
             f"### {i}. {res['q']}\n"
             f"- **Эталон:** {res['ref']}\n"
             f"- **Ответ:** {res['a']}\n"
-            f"- **Метрики:** {icon} Hit={res['hit']} | "
-            f"Score={res['score']:.4f}\n"
+            f"- **Метрики:** {icon} Hit={res['hit']}\n"
         )
         f_extra = res.get("faithfulness")
         r_extra = res.get("relevance")
-        if f_extra is not None or r_extra is not None:
+        s_extra = res.get("similarity")
+        if f_extra is not None or r_extra is not None or s_extra is not None:
           bits = []
           if f_extra is not None:
             bits.append(f"F={f_extra:.3f}")
           if r_extra is not None:
             bits.append(f"R={r_extra:.3f}")
+          if s_extra is not None:
+            bits.append(f"S={s_extra:.3f}")
           line = line.rstrip() + f" | {' / '.join(bits)}\n"
         f.write(line + "\n")
 
@@ -460,10 +480,14 @@ class TestPipelineRunner:
               )
               latency = time.time() - start_time
 
-              faith_score, rel_score = await self._aevaluate_judge_scores(
-                  qa["question"], response, full_context
+              faith_score, rel_score, sim_score = (
+                  await self._aevaluate_judge_scores(
+                      qa["question"],
+                      response,
+                      full_context,
+                      reference_answer=qa.get("answer"),
+                  )
               )
-              score = self._aggregate_judge_score(faith_score, rel_score)
 
               self._append_to_trace(
                   trace_file,
@@ -471,19 +495,18 @@ class TestPipelineRunner:
                   qa,
                   safe_docs,
                   response,
-                  score,
                   latency,
                   hit,
                   faithfulness=faith_score,
                   relevance=rel_score,
+                  reference_similarity=sim_score,
                   hyde_trace=hy_snap,
               )
 
               icon = "✅" if hit else "❌"
               logger.info(
-                  "   -> %s Hit | score=%.2f | latency=%.1fs",
+                  "   -> %s Hit | latency=%.1fs",
                   icon,
-                  score,
                   latency,
               )
 
@@ -491,11 +514,11 @@ class TestPipelineRunner:
                   "q": qa["question"],
                   "a": response,
                   "ref": qa["answer"],
-                  "score": score,
                   "latency": latency,
                   "hit": hit,
                   "faithfulness": faith_score.score if faith_score else None,
                   "relevance": rel_score.score if rel_score else None,
+                  "similarity": sim_score.score if sim_score else None,
               })
             except Exception as e:
               logger.exception("Ошибка при ответе на вопрос #%s", i + 1)
@@ -598,12 +621,14 @@ class TestPipelineRunner:
                 hit = self._calculate_hit_rate(step["a"], docs)
                 total_hit_rate += hit
                 full_context = self._build_full_context_from_docs(docs)
-                faith_score, rel_score = await self._aevaluate_judge_scores(
-                    step["q"],
-                    bot_answer,
-                    full_context,
+                faith_score, rel_score, sim_score = (
+                    await self._aevaluate_judge_scores(
+                        step["q"],
+                        bot_answer,
+                        full_context,
+                        reference_answer=step.get("a"),
+                    )
                 )
-                score = self._aggregate_judge_score(faith_score, rel_score)
 
                 step_qa = {"question": step["q"], "answer": step["a"]}
                 self._append_to_trace(
@@ -612,19 +637,18 @@ class TestPipelineRunner:
                     step_qa,
                     docs,
                     bot_answer,
-                    score,
                     latency,
                     hit,
                     faithfulness=faith_score,
                     relevance=rel_score,
+                    reference_similarity=sim_score,
                     hyde_trace=hy_snap_sc,
                 )
 
                 icon = "✅" if hit else "❌"
                 logger.info(
-                    "     -> %s Hit | score=%.2f | latency=%.1fs",
+                    "     -> %s Hit | latency=%.1fs",
                     icon,
-                    score,
                     latency,
                 )
 
@@ -632,13 +656,13 @@ class TestPipelineRunner:
                     "q": f"[{sc['name']}] {step['q']}",
                     "a": bot_answer,
                     "ref": step["a"],
-                    "score": score,
                     "latency": latency,
                     "hit": hit,
                     "faithfulness": (
                         faith_score.score if faith_score else None
                     ),
                     "relevance": rel_score.score if rel_score else None,
+                    "similarity": sim_score.score if sim_score else None,
                 })
               except Exception as e:
                 logger.exception(
@@ -674,7 +698,6 @@ class TestPipelineRunner:
 
     if results and interrupted is None:
       avg_metrics = {
-          "sim": sum(r["score"] for r in results) / len(results),
           "lat": sum(r["latency"] for r in results) / len(results),
           "hit": total_hit_rate / len(results),
       }
@@ -683,7 +706,6 @@ class TestPipelineRunner:
           "Итоги chunker=%s режим=%s", args.chunker, test_mode
       )
       logger.info("Hit rate: %.2f%%", avg_metrics["hit"] * 100)
-      logger.info("Score (aggregate): %.4f", avg_metrics["sim"])
       logger.info("Avg latency: %.2fs", avg_metrics["lat"])
       rows_f = [r for r in results if r.get("faithfulness") is not None]
       rows_r = [r for r in results if r.get("relevance") is not None]
@@ -696,6 +718,14 @@ class TestPipelineRunner:
         avg_rel = sum(r["relevance"] for r in rows_r) / len(rows_r)
         logger.info(
             "Avg relevance: %.4f (n=%s)", avg_rel, len(rows_r)
+        )
+      rows_s = [r for r in results if r.get("similarity") is not None]
+      if rows_s:
+        avg_sim = sum(r["similarity"] for r in rows_s) / len(rows_s)
+        logger.info(
+            "Avg similarity (LLM vs etalon): %.4f (n=%s)",
+            avg_sim,
+            len(rows_s),
         )
       self._save_final_report(results, args, avg_metrics, output_stem)
     elif not results:

@@ -21,7 +21,11 @@ from src.pipelines.rag.pipeline import (
   create_generation_chain,
   get_llm_from_config,
 )
-from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
+from src.evaluation.metrics import (
+    FaithfulnessEvaluator,
+    ReferenceSimilarityEvaluator,
+    RelevanceEvaluator,
+)
 
 # Импорты Чанкеров
 from src.parsing_and_chunking.chunkers.semantic_html_chunker import \
@@ -201,6 +205,11 @@ class Container(containers.DeclarativeContainer):
   )
   relevance_evaluator = providers.Factory(
       RelevanceEvaluator,
+      llm=judge_llm,
+      timeout=config.evaluation_metrics.timeout_seconds,
+  )
+  reference_similarity_evaluator = providers.Factory(
+      ReferenceSimilarityEvaluator,
       llm=judge_llm,
       timeout=config.evaluation_metrics.timeout_seconds,
   )

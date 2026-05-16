@@ -102,8 +102,16 @@ def main():
   test_parser.add_argument("eval_mode", nargs="?",
                            choices=["all", "questions", "scenarios"],
                            help="Режим тестирования")
-  test_parser.add_argument("--chunker", type=str, default="markdown",
-                           choices=["markdown", "semantic", "unstructured", "parent"])
+  test_parser.add_argument(
+      "--chunker",
+      type=str,
+      default=None,
+      choices=["markdown", "semantic", "unstructured", "parent"],
+      help=(
+          "Переопределить indexing.chunker из config.yaml; "
+          "без флага — chunker из indexing.chunker."
+      ),
+  )
   test_parser.add_argument("--retriever", type=str, default="hybrid")
   test_parser.add_argument("--index-mode", type=str, default="test",
                            choices=["test", "full"])
@@ -203,6 +211,7 @@ def main():
 
   # Настройка путей для ТЕСТА
   if args.command == "test":
+    args.chunker = _resolve_index_chunker(config, getattr(args, "chunker", None))
     if getattr(args, "active_type", None):
       config["retrievers"]["active_type"] = args.active_type
     if "memory" not in config:
@@ -253,6 +262,9 @@ def main():
         ),
         relevance_evaluator=(
             container.relevance_evaluator() if use_judge else None
+        ),
+        reference_similarity_evaluator=(
+            container.reference_similarity_evaluator() if use_judge else None
         ),
     )
     async def _run_single_test():

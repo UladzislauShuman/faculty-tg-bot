@@ -229,6 +229,11 @@ async def run_matrix(base_config: dict, args: Namespace) -> None:
           relevance_evaluator=(
               container.relevance_evaluator() if use_judge else None
           ),
+          reference_similarity_evaluator=(
+              container.reference_similarity_evaluator()
+              if use_judge
+              else None
+          ),
       )
 
       logger.info("%s", "=" * 60)

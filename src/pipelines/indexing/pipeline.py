@@ -80,7 +80,7 @@ def _apply_e5_passage_prefix(chunks: List[Document], model_name: str) -> List[
   """
   Для E5 к тексту чанка добавляется префикс passage: (согласовано с запросами query:).
   """
-  if "e5" in model_name:
+  if "e5" in model_name.lower():
     return [
       Document(
           page_content=f"passage: {chunk.page_content}",
