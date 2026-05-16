@@ -76,6 +76,48 @@ def _resolve_index_chunker(
   return effective
 
 
+def _apply_rag_stack_env_overrides(config_data: dict) -> None:
+  """Подмена имени моделей из окружения (A/B через test.sh или CI).
+
+  Задаются только переменные с непустым значением после strip.
+  Префикс RAG_* снижает риск коллизий с прочими env.
+  """
+  def _set(keys: tuple[str, ...], env_name: str) -> None:
+    raw = os.environ.get(env_name)
+    if raw is None:
+      return
+    val = str(raw).strip()
+    if not val:
+      return
+    cur: dict = config_data
+    for k in keys[:-1]:
+      nxt = cur.get(k)
+      if not isinstance(nxt, dict):
+        cur[k] = {}
+        nxt = cur[k]
+      cur = nxt
+    cur[keys[-1]] = val
+    print(f"🔧 Env {env_name} → {'/'.join(keys)} = {val}")
+
+  _set(("embedding_model", "name"), "RAG_EMBEDDING_MODEL")
+  _set(("providers", "ollama", "model"), "RAG_OLLAMA_MODEL")
+  
+  # Поддержка переопределения num_ctx
+  raw_ctx = os.environ.get("RAG_OLLAMA_NUM_CTX")
+  if raw_ctx and str(raw_ctx).strip().isdigit():
+      ctx_val = int(str(raw_ctx).strip())
+      if "providers" in config_data and "ollama" in config_data["providers"]:
+          config_data["providers"]["ollama"]["num_ctx"] = ctx_val
+          print(f"🔧 Env RAG_OLLAMA_NUM_CTX → providers/ollama/num_ctx = {ctx_val}")
+
+  _set(("retrievers", "reranker", "model"), "RAG_RERANKER_MODEL")
+  _set(("evaluation_metrics", "judge_llm", "model"), "RAG_EVAL_JUDGE_MODEL")
+  _set(("semantic_routing", "llm", "model"), "RAG_ROUTING_MODEL")
+  _set(("memory", "summary_llm", "model"), "RAG_SUMMARY_MODEL")
+  _set(("hyde", "llm", "model"), "RAG_HYDE_MODEL")
+  _set(("evaluation_model", "name"), "RAG_EVAL_EMBEDDING_MODEL")
+
+
 # --- MAIN CLI ---
 
 def main():
@@ -102,8 +144,16 @@ def main():
   test_parser.add_argument("eval_mode", nargs="?",
                            choices=["all", "questions", "scenarios"],
                            help="Режим тестирования")
-  test_parser.add_argument("--chunker", type=str, default="markdown",
-                           choices=["markdown", "semantic", "unstructured", "parent"])
+  test_parser.add_argument(
+      "--chunker",
+      type=str,
+      default=None,
+      choices=["markdown", "semantic", "unstructured", "parent"],
+      help=(
+          "Переопределить indexing.chunker из config.yaml; "
+          "без флага — chunker из indexing.chunker."
+      ),
+  )
   test_parser.add_argument("--retriever", type=str, default="hybrid")
   test_parser.add_argument("--index-mode", type=str, default="test",
                            choices=["test", "full"])
@@ -194,6 +244,8 @@ def main():
   except Exception as e:
     sys.exit(f"Config missing or invalid: {e}")
 
+  _apply_rag_stack_env_overrides(config)
+
   # --- Переопределение режима из CLI ---
   if hasattr(args, 'eval_mode') and args.eval_mode:
     if 'evaluation_settings' not in config:
@@ -203,6 +255,7 @@ def main():
 
   # Настройка путей для ТЕСТА
   if args.command == "test":
+    args.chunker = _resolve_index_chunker(config, getattr(args, "chunker", None))
     if getattr(args, "active_type", None):
       config["retrievers"]["active_type"] = args.active_type
     if "memory" not in config:
@@ -253,6 +306,9 @@ def main():
         ),
         relevance_evaluator=(
             container.relevance_evaluator() if use_judge else None
+        ),
+        reference_similarity_evaluator=(
+            container.reference_similarity_evaluator() if use_judge else None
         ),
     )
     async def _run_single_test():

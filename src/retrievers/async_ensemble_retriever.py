@@ -40,3 +40,30 @@ class AsyncEnsembleRetriever(EnsembleRetriever):
             retriever_docs = list(pool.map(_run_one, range(len(self.retrievers))))
 
         return self.weighted_reciprocal_rank(retriever_docs)
+
+    def weighted_reciprocal_rank(self, doc_lists: List[List[Document]]) -> List[Document]:
+        """
+        Слияние результатов по алгоритму RRF.
+        Переопределено для дедупликации по chunk_id (если есть) или по хешу контента,
+        чтобы избежать дубликатов из-за мелких различий в тексте (например, префиксов).
+        """
+        c = 60
+        rrf_score: dict[str, float] = {}
+        doc_map: dict[str, Document] = {}
+
+        for doc_list, weight in zip(doc_lists, self.weights):
+            for rank, doc in enumerate(doc_list, start=1):
+                # Используем chunk_id для надежной дедупликации
+                doc_key = doc.metadata.get("chunk_id")
+                if not doc_key:
+                    doc_key = str(hash(doc.page_content))
+                
+                if doc_key not in rrf_score:
+                    rrf_score[doc_key] = 0.0
+                    doc_map[doc_key] = doc
+                
+                rrf_score[doc_key] += weight / (rank + c)
+
+        # Сортируем по убыванию RRF score
+        sorted_keys = sorted(rrf_score.keys(), key=lambda k: rrf_score[k], reverse=True)
+        return [doc_map[k] for k in sorted_keys]

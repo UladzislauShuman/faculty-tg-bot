@@ -18,6 +18,7 @@ from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from src.interfaces.data_processor_interfaces import DataSourceProcessor
 from src.pipelines.indexing.crawlers.website_crawler import WebsiteCrawler
 from src.util.hf_embeddings import huggingface_embedding_model_kwargs
+from src.retrievers.e5_query_embeddings import E5QueryEmbeddings
 from src.util.yaml_parser import TestSetLoader
 
 logger = logging.getLogger(__name__)
@@ -78,16 +79,9 @@ def _prepare_embeddings(config: Dict[str, Any]):
 def _apply_e5_passage_prefix(chunks: List[Document], model_name: str) -> List[
   Document]:
   """
-  Для E5 к тексту чанка добавляется префикс passage: (согласовано с запросами query:).
+  УСТАРЕЛО: Префикс passage: теперь добавляется внутри E5QueryEmbeddings.embed_documents.
+  Эта функция возвращает чанки без изменений, чтобы в БД лежал чистый текст.
   """
-  if "e5" in model_name:
-    return [
-      Document(
-          page_content=f"passage: {chunk.page_content}",
-          metadata=chunk.metadata
-      )
-      for chunk in chunks
-    ]
   return chunks
 
 
@@ -130,7 +124,10 @@ def _index_chroma_bm25(chunks: List[Document], config: Dict[str, Any]):
   logger.info("Chroma: векторизация и persist в %s", db_dir)
   embeddings_model = _prepare_embeddings(config)
 
-  # Применяем префиксы E5 перед векторизацией
+  if "e5" in model_name:
+    embeddings_model = E5QueryEmbeddings(embeddings_model)
+
+  # Применяем префиксы E5 перед векторизацией (оставлено для обратной совместимости, теперь no-op)
   chunks_to_embed = _apply_e5_passage_prefix(chunks,
                                              config['embedding_model']['name'])
 
@@ -150,6 +147,9 @@ def _index_qdrant(chunks: List[Document], config: Dict[str, Any]):
   collection_name = qdrant_config['collection_name']
 
   embeddings_model = _prepare_embeddings(config)
+  if "e5" in config['embedding_model']['name']:
+    embeddings_model = E5QueryEmbeddings(embeddings_model)
+
   # Важно: для Sparse векторов тоже нужен препроцессинг (тот же, что мы делали для BM25)
   # Но FastEmbed/Qdrant сделают базовую токенизацию сами.
 

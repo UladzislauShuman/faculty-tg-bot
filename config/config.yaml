@@ -141,7 +141,9 @@ retrievers:
     # [значения] целое число ≥ 1 (часто 3–5; больше — богаче контекст, дольше generation)
     # [смысл] сколько документов после реранкера отдаётся в LLM-контекст
     # [откат] 3
-    top_n: 5
+    # чем больше это число, тем больше попадает в контекст в промт. Но чем больше контекст, тем иногда хуже ориентируется LLM
+    # поэтому для своей llama 3.1 я использую только число 3
+    top_n: &default_top_n 3
 
 # -----------------------------------------------------------------------------
 # Раздел E — LLM для ответов (providers)
@@ -154,8 +156,16 @@ providers:
     type: ollama
     # [значения] имя модели в Ollama (ollama pull …)
     # [смысл] модель основного ответа бота
-    model: "qwen2.5:14b-instruct-q4_K_M"  # old "llama3.1"
-    temperature: 0.1  # old: не задано → дефолт 0.7 в get_llm_from_config
+    model: &default_model "llama3.1" # "qwen2.5:14b-instruct-q4_K_M"
+    temperature: 0.3  # old: не задано → дефолт 0.7 в get_llm_from_config
+    # [значения] целое число (например, 2048, 8192, 32768, 131072, 262144)
+    # [смысл] Явный размер контекстного окна (num_ctx) для API Ollama.
+    # Минимум: 2048 (дефолт Ollama, если не указать).
+    # Оптимально для RAG: 8192 - 32768 (вмещает много длинных чанков и историю, не сильно тормозит).
+    # Максимум: зависит от модели (Llama 3.1 - 128k, Qwen 2.5 - 128k/256k).
+    # ВНИМАНИЕ: Чем больше это число, тем больше VRAM потребляет модель при генерации.
+    # Если поставить 262144, но не хватит памяти, Ollama упадёт или будет работать очень медленно на CPU.
+    num_ctx: 131072
 
   yandex_gpt:
     # [значения] yandex_gpt
@@ -204,7 +214,7 @@ hyde:
     type: "ollama"
     # [значения] имя модели провайдера
     # [смысл] модель для генерации гипотезы; один образ с основным ответчиком (ollama pull …)
-    model: "qwen2.5:14b-instruct-q4_K_M" # "llama3.1"
+    model: *default_model # "llama3.1"
     # [значения] float 0.0–2.0 (типично 0–1)
     # [смысл] креативность гипотезы; выше — больше разброс текста
     temperature: 0.7
@@ -239,7 +249,7 @@ memory:
     # [значения] ollama | yandex_gpt
     type: "ollama"
     # [значения] имя модели
-    model: "qwen2.5:14b-instruct-q4_K_M" # "llama3.1"
+    model: *default_model # "llama3.1"
     # [значения] float; 0 — детерминированнее
     temperature: 0.0
   # [значения] секунды
@@ -272,7 +282,7 @@ semantic_routing:
     # [значения] ollama | yandex_gpt
     type: ollama
     # [значения] имя модели (та же, что providers.ollama — один pull)
-    model: "qwen2.5:14b-instruct-q4_K_M" # "llama3.1"
+    model: *default_model # "llama3.1"
     # [значения] float; 0 для стабильной классификации
     temperature: 0.0
 
@@ -284,6 +294,10 @@ rag_pipeline:
   stage_timing_logs:
     # [значения] true | false; также env RAG_TIMING_LOGS=0 может отключать в main.py
     # [смысл] печать строк [TIMING] stage=… в логах
+    enabled: true
+  save_prompts:
+    # [значения] true | false
+    # [смысл] сохранять полные промпты (с контекстом и историей) перед отправкой в LLM в текстовые файлы
     enabled: true
 
 # -----------------------------------------------------------------------------
@@ -310,7 +324,7 @@ evaluation_metrics:
     # [значения] ollama | yandex_gpt
     type: "ollama"
     # [значения] имя модели (должна быть доступна, например ollama pull)
-    model: "qwen2.5:14b-instruct-q4_K_M"  # "llama3.1"
+    model: *default_model  # "llama3.1"
     # [значения] float; 0.0 — повторяемые оценки
     temperature: 0.0
   metrics:
@@ -318,6 +332,9 @@ evaluation_metrics:
     faithfulness: true
     # [значения] true | false
     answer_relevance: true
+    # [значения] true | false
+    # [смысл] LLM-judge: согласованность ответа бота с эталоном из qa-set (не эмбеддинг)
+    similarity: true
   # [значения] секунды
   # [смысл] таймаут на каждый вызов судьи (asyncio.wait_for)
   timeout_seconds: 60
@@ -335,60 +352,158 @@ evaluation_settings:
 # -----------------------------------------------------------------------------
 # [смысл] Список именованных профилей для main.py test-matrix: chunker, index_mode, force_index, overrides.
 # overrides — частичный deep-merge поверх этого файла на время сценария.
+# Линейка миграции: hybrid retrieval, summary_window, search_k=20, reranker top_n=5, HyDE off.
 evaluation_scenarios:
-  # Ночной прогон: baseline → parent → HyDE (тот же индекс) → mega (тот же parent-индекс).
-  - name: "qdrant_baseline"
+  - name: "lineage_baseline_chroma_bm25_legacy_models"
     chunker: markdown
     index_mode: test
     force_index: true
+    retriever: hybrid
     overrides:
-      retrievers:
-        active_type: qdrant
+      embedding_model:
+        name: "intfloat/multilingual-e5-large"
+      providers:
+        ollama:
+          model: "llama3.1"
+          temperature: 0.1
+      semantic_routing:
+        llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.0
       memory:
         enabled: true
-        type: summary_window
-
-  - name: "qdrant_parent"
-    chunker: parent
-    index_mode: test
-    force_index: true
-    overrides:
-      retrievers:
-        active_type: qdrant
-      parent_document:
-        enabled: true
-      memory:
-        enabled: true
-        type: summary_window
-
-  - name: "qdrant_hyde"
-    chunker: markdown
-    index_mode: test
-    force_index: false
-    overrides:
-      retrievers:
-        active_type: qdrant
+        type: "summary_window"
+        summary_llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.0
       hyde:
-        enabled: true
-      memory:
-        enabled: true
-        type: summary_window
-
-  - name: "qdrant_mega_max"
-    chunker: parent
-    index_mode: test
-    force_index: false
-    overrides:
+        enabled: false
+        llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.7
+      evaluation_model:
+        name: "cointegrated/rubert-tiny2"
+      evaluation_metrics:
+        judge_llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.0
+      parent_document:
+        enabled: false
       retrievers:
-        active_type: qdrant
+        active_type: chroma_bm25
+        vector_store:
+          search_k: 20
         qdrant:
-          search_k: 30
-      reranker:
-        top_n: 8
-      parent_document:
-        enabled: true
-      hyde:
-        enabled: true
+          search_k: 20
+        reranker:
+          enabled: true
+          type: "cross_encoder"
+          model: "DiTy/cross-encoder-russian-msmarco"
+          top_n: *default_top_n
+
+  - name: "lineage_qdrant_parent_legacy_models"
+    chunker: parent
+    index_mode: test
+    force_index: true
+    retriever: hybrid
+    overrides:
+      embedding_model:
+        name: "intfloat/multilingual-e5-large"
+      providers:
+        ollama:
+          model: "llama3.1"
+          temperature: 0.1
+      semantic_routing:
+        llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.0
       memory:
         enabled: true
-        type: summary_window
+        type: "summary_window"
+        summary_llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.0
+      hyde:
+        enabled: false
+        llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.7
+      evaluation_model:
+        name: "cointegrated/rubert-tiny2"
+      evaluation_metrics:
+        judge_llm:
+          type: "ollama"
+          model: "llama3.1"
+          temperature: 0.0
+      parent_document:
+        enabled: true
+      retrievers:
+        active_type: qdrant
+        vector_store:
+          search_k: 20
+        qdrant:
+          search_k: 20
+        reranker:
+          enabled: true
+          type: "cross_encoder"
+          model: "DiTy/cross-encoder-russian-msmarco"
+          top_n: *default_top_n
+
+  - name: "lineage_qdrant_parent_current_models"
+    chunker: parent
+    index_mode: test
+    force_index: true
+    retriever: hybrid
+    overrides:
+      embedding_model:
+        name: "BAAI/bge-m3"
+      providers:
+        ollama:
+          model: "qwen2.5:14b-instruct-q4_K_M"
+          temperature: 0.1
+      semantic_routing:
+        llm:
+          type: "ollama"
+          model: "qwen2.5:14b-instruct-q4_K_M"
+          temperature: 0.0
+      memory:
+        enabled: true
+        type: "summary_window"
+        summary_llm:
+          type: "ollama"
+          model: "qwen2.5:14b-instruct-q4_K_M"
+          temperature: 0.0
+      hyde:
+        enabled: false
+        llm:
+          type: "ollama"
+          model: "qwen2.5:14b-instruct-q4_K_M"
+          temperature: 0.7
+      evaluation_model:
+        name: "sentence-transformers/paraphrase-multilingual-mpnet-base-v2"
+      evaluation_metrics:
+        judge_llm:
+          type: "ollama"
+          model: "qwen2.5:14b-instruct-q4_K_M"
+          temperature: 0.0
+      parent_document:
+        enabled: true
+      retrievers:
+        active_type: qdrant
+        vector_store:
+          search_k: 20
+        qdrant:
+          search_k: 20
+        reranker:
+          enabled: true
+          type: "cross_encoder"
+          model: "BAAI/bge-reranker-v2-m3"
+          top_n: *default_top_n
+

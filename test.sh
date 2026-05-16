@@ -9,6 +9,118 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
+# -----------------------------------------------------------------------------
+# Профили моделей для сравнения A/B — передаются в контейнер как -e RAG_*.
+# main.py после загрузки config/config.yaml подменяет ключи см. _apply_rag_stack_env_overrides.
+#
+# Своя серия экспериментов: измените строки ниже или задайте до запуска:
+#   RAG_MODEL_PROFILE=prev ./test.sh          # только предыдущий стек (без вопроса)
+#   RAG_MODEL_PROFILE=new ./test.sh          # только новый стек
+#   RAG_MODEL_PROFILE=yaml ./test.sh           # только yaml (переменные RAG_* не задаются)
+# Либо переопределите по одному прямо в вызове docker (поверх профиля):
+#   docker-compose exec -e RAG_OLLAMA_MODEL=mistral rag-cli python main.py test …
+#
+# Если меняете RAG_EMBEDDING_MODEL относительно уже проиндексированной базы —
+# нужна полная переиндексация (в тестах: включите пересборку / --force-index).
+# -----------------------------------------------------------------------------
+RAG_MODEL_PROFILE="${RAG_MODEL_PROFILE:-}" # prev | new | yaml — если не пустой, без интерактива
+
+# Предыдущий стек (типичный «до смены» в этом репозитории)
+RAG_PREV_OLLAMA="${RAG_PREV_OLLAMA:-llama3.1}"
+RAG_PREV_EMBEDDING="${RAG_PREV_EMBEDDING:-intfloat/multilingual-e5-large}"
+RAG_PREV_RERANKER="${RAG_PREV_RERANKER:-DiTy/cross-encoder-russian-msmarco}"
+RAG_PREV_JUDGE="${RAG_PREV_JUDGE:-$RAG_PREV_OLLAMA}"
+RAG_PREV_ROUTING="${RAG_PREV_ROUTING:-$RAG_PREV_OLLAMA}"
+RAG_PREV_SUMMARY="${RAG_PREV_SUMMARY:-$RAG_PREV_OLLAMA}"
+RAG_PREV_HYDE="${RAG_PREV_HYDE:-$RAG_PREV_OLLAMA}"
+RAG_PREV_EVAL_EMBEDDING="${RAG_PREV_EVAL_EMBEDDING:-cointegrated/rubert-tiny2}"
+
+# Текущий «новый» стек — совпадайте поля здесь при смене config.yaml
+RAG_NEW_OLLAMA="${RAG_NEW_OLLAMA:-qwen2.5:14b-instruct-q4_K_M}"
+RAG_NEW_EMBEDDING="${RAG_NEW_EMBEDDING:-BAAI/bge-m3}"
+RAG_NEW_RERANKER="${RAG_NEW_RERANKER:-BAAI/bge-reranker-v2-m3}"
+RAG_NEW_JUDGE="${RAG_NEW_JUDGE:-$RAG_NEW_OLLAMA}"
+RAG_NEW_ROUTING="${RAG_NEW_ROUTING:-$RAG_NEW_OLLAMA}"
+RAG_NEW_SUMMARY="${RAG_NEW_SUMMARY:-$RAG_NEW_OLLAMA}"
+RAG_NEW_HYDE="${RAG_NEW_HYDE:-$RAG_NEW_OLLAMA}"
+RAG_NEW_EVAL_EMBEDDING="${RAG_NEW_EVAL_EMBEDDING:-sentence-transformers/paraphrase-multilingual-mpnet-base-v2}"
+
+DOCKER_RAG_ENV=()
+
+_print_model_profile_summary() {
+    echo -e "\n${CYAN}Стеки для сравнения (редактируйте переменные RAG_* в начале test.sh):${NC}"
+    echo -e "  ${YELLOW}[prev]${NC} Ollama:${RAG_PREV_OLLAMA} | embed:${RAG_PREV_EMBEDDING} | rerank:${RAG_PREV_RERANKER}"
+    echo -e "         judge/routing/summary/hyde: ${RAG_PREV_JUDGE} | eval_emb: ${RAG_PREV_EVAL_EMBEDDING}"
+    echo -e "  ${YELLOW}[new] ${NC} Ollama:${RAG_NEW_OLLAMA} | embed:${RAG_NEW_EMBEDDING} | rerank:${RAG_NEW_RERANKER}"
+    echo -e "         judge/routing/summary/hyde: ${RAG_NEW_JUDGE} | eval_emb: ${RAG_NEW_EVAL_EMBEDDING}"
+}
+
+_fill_docker_rag_env_previous_stack() {
+    DOCKER_RAG_ENV=(
+        -e "RAG_OLLAMA_MODEL=$RAG_PREV_OLLAMA"
+        -e "RAG_EMBEDDING_MODEL=$RAG_PREV_EMBEDDING"
+        -e "RAG_RERANKER_MODEL=$RAG_PREV_RERANKER"
+        -e "RAG_EVAL_JUDGE_MODEL=$RAG_PREV_JUDGE"
+        -e "RAG_ROUTING_MODEL=$RAG_PREV_ROUTING"
+        -e "RAG_SUMMARY_MODEL=$RAG_PREV_SUMMARY"
+        -e "RAG_HYDE_MODEL=$RAG_PREV_HYDE"
+        -e "RAG_EVAL_EMBEDDING_MODEL=$RAG_PREV_EVAL_EMBEDDING"
+    )
+}
+
+_fill_docker_rag_env_new_stack() {
+    DOCKER_RAG_ENV=(
+        -e "RAG_OLLAMA_MODEL=$RAG_NEW_OLLAMA"
+        -e "RAG_EMBEDDING_MODEL=$RAG_NEW_EMBEDDING"
+        -e "RAG_RERANKER_MODEL=$RAG_NEW_RERANKER"
+        -e "RAG_EVAL_JUDGE_MODEL=$RAG_NEW_JUDGE"
+        -e "RAG_ROUTING_MODEL=$RAG_NEW_ROUTING"
+        -e "RAG_SUMMARY_MODEL=$RAG_NEW_SUMMARY"
+        -e "RAG_HYDE_MODEL=$RAG_NEW_HYDE"
+        -e "RAG_EVAL_EMBEDDING_MODEL=$RAG_NEW_EVAL_EMBEDDING"
+    )
+}
+
+apply_model_profile_selection() {
+    local prof="$1"
+    DOCKER_RAG_ENV=()
+    prof="$(echo "$prof" | tr '[:upper:]' '[:lower:]')"
+    case "$prof" in
+        yaml|config| '')
+            ;;
+        prev|previous|old|p|1)
+            _fill_docker_rag_env_previous_stack
+            ;;
+        new|current|n|2)
+            _fill_docker_rag_env_new_stack
+            ;;
+        *)
+            echo -e "${YELLOW}⚠ Неизвестный профиль «$1», использую yaml (без RAG_*).${NC}"
+            ;;
+    esac
+}
+
+_resolve_model_profile() {
+    if [ -n "$RAG_MODEL_PROFILE" ]; then
+        MODEL_PROFILE_CHOICE=$(echo "$RAG_MODEL_PROFILE" | tr '[:upper:]' '[:lower:]')
+        echo -e "${GREEN}Профиль моделей из окружения: ${YELLOW}${MODEL_PROFILE_CHOICE}${NC}"
+    else
+        _print_model_profile_summary
+        echo -e "${CYAN}Какие модели подставить в прогон?${NC}"
+        echo -e "  ${GREEN}yaml${NC} — только config.yaml, без переопределения RAG_*"
+        echo -e "  ${GREEN}prev${NC} — стек «был раньше» (RAG_PREV_*)"
+        echo -e "  ${GREEN}new${NC}  — текущий стек (RAG_NEW_*) — по умолчанию как в этом скрипте"
+        read -p "Выбор профиля [yaml/prev/new] (yaml): " MODEL_PROFILE_CHOICE
+        MODEL_PROFILE_CHOICE=${MODEL_PROFILE_CHOICE:-yaml}
+    fi
+    apply_model_profile_selection "$MODEL_PROFILE_CHOICE"
+    if [ "${#DOCKER_RAG_ENV[@]}" -gt 0 ]; then
+        echo -e "${GREEN}В контейнер передаём переопределения RAG_* (профиль: ${YELLOW}${MODEL_PROFILE_CHOICE}${GREEN}).${NC}"
+    else
+        echo -e "${GREEN}Модели: только из ${CYAN}config/config.yaml${NC}."
+    fi
+}
+
 echo -e "${GREEN}🧪 Запуск интерактивного тестирования FPMI RAG Bot...${NC}\n"
 
 # --- Шаг 1: Проверка окружения и запуск контейнеров ---
@@ -70,6 +182,10 @@ echo -e "      ${GREEN}✓ База данных готова.${NC}\n"
 
 # --- Шаг 2: Главное меню ---
 echo -e "${CYAN}Выберите способ запуска тестов:${NC}"
+echo -e "  (Профиль моделей задаётся сразу после выбора: ${YELLOW}yaml${NC} | ${YELLOW}prev${NC} | ${YELLOW}new${NC} или ${YELLOW}RAG_MODEL_PROFILE=${NC}; см. начало ${CYAN}test.sh${NC}.)"
+echo -e "  ${GREEN}0)${NC} Как в ${CYAN}config/config.yaml${NC}: режим ${YELLOW}all${NC} + ${YELLOW}--force-index${NC}"
+echo -e "     Chunker — ${CYAN}indexing.chunker${NC}; ${CYAN}retrievers.active_type${NC}, память, HyDE — из yaml (без флагов из скрипта)."
+echo -e "     ${YELLOW}--retriever${NC} и ${YELLOW}--index-mode${NC}: дефолты CLI (hybrid, test), см. ${CYAN}main.py test${NC}."
 echo -e "  ${GREEN}1)${NC} Быстрый запуск (Дефолтный сценарий Владислава)"
 echo -e "     ${YELLOW}[all, markdown, hybrid, test, force-index, chroma_bm25, summary_window]${NC}"
 echo -e "     HyDE (опционально): задайте ${CYAN}RAG_HYDE=on${NC} или ${CYAN}RAG_HYDE=off${NC} перед запуском; иначе — как в config.yaml"
@@ -78,23 +194,35 @@ echo -e "  ${GREEN}2)${NC} Интерактивная настройка (Выб
 echo -e "  ${GREEN}3)${NC} Матрица сценариев из config.yaml (python main.py test-matrix)"
 echo -e "  ${GREEN}4)${NC} Продолжить матрицу после паузы (python main.py test-matrix --resume)"
 echo -e "  ${GREEN}5)${NC} Выход"
-read -p "Ваш выбор [1-5]: " MENU_CHOICE
+read -p "Ваш выбор [0-5]: " MENU_CHOICE
 
 if [ "$MENU_CHOICE" == "5" ]; then
     echo "Выход."
     exit 0
 fi
 
+_resolve_model_profile
+
+if [ "$MENU_CHOICE" == "0" ]; then
+    echo -e "\n${CYAN}=========================================${NC}"
+    echo -e "${GREEN}Запуск:${NC} ${YELLOW}main.py test all --force-index${NC} (остальное — из config.yaml, chunker из indexing.chunker)"
+    echo -e "${CYAN}=========================================${NC}\n"
+    docker-compose exec "${DOCKER_RAG_ENV[@]}" rag-cli python main.py test all --force-index
+    echo -e "\n${GREEN}✅ Тестирование завершено!${NC}"
+    echo -e "Подробные логи и результаты сохранены в папке ${YELLOW}output/${NC}."
+    exit 0
+fi
+
 if [ "$MENU_CHOICE" == "3" ]; then
     echo -e "\n${YELLOW}Запуск матрицы evaluation_scenarios (test-matrix)...${NC}"
-    docker-compose exec rag-cli python main.py test-matrix
+    docker-compose exec "${DOCKER_RAG_ENV[@]}" rag-cli python main.py test-matrix
     echo -e "\n${GREEN}✅ Готово. Чекпоинт: check_points/default_checkpoint.json${NC}"
     exit 0
 fi
 
 if [ "$MENU_CHOICE" == "4" ]; then
     echo -e "\n${YELLOW}Продолжение матрицы (--resume)...${NC}"
-    docker-compose exec rag-cli python main.py test-matrix --resume
+    docker-compose exec "${DOCKER_RAG_ENV[@]}" rag-cli python main.py test-matrix --resume
     echo -e "\n${GREEN}✅ Готово.${NC}"
     exit 0
 fi
@@ -224,13 +352,22 @@ if [ -n "$HYDE_CLI" ]; then
 else
     echo -e "   HyDE:         ${YELLOW}как в config.yaml (флаг не передаётся)${NC}"
 fi
+if [ "${#DOCKER_RAG_ENV[@]}" -gt 0 ]; then
+    echo -e "   Модели:       ${YELLOW}RAG_* → контейнер (профиль ${MODEL_PROFILE_CHOICE})${NC}"
+else
+    echo -e "   Модели:       ${YELLOW}только config.yaml${NC}"
+fi
 echo -e "${CYAN}=========================================${NC}\n"
 
-# Формируем итоговую команду
-CMD="docker-compose exec rag-cli python main.py test $EVAL_MODE --chunker=$CHUNKER --retriever=$RETRIEVER --index-mode=$INDEX_MODE $FORCE_INDEX --active-type=$ACTIVE_TYPE --memory-type=$MEMORY_TYPE $MEMORY_OFF_FLAG $HYDE_CLI"
-
-# Выполняем команду
-eval $CMD
+docker-compose exec "${DOCKER_RAG_ENV[@]}" rag-cli python main.py test "$EVAL_MODE" \
+    --chunker="$CHUNKER" \
+    --retriever="$RETRIEVER" \
+    --index-mode="$INDEX_MODE" \
+    $FORCE_INDEX \
+    --active-type="$ACTIVE_TYPE" \
+    --memory-type="$MEMORY_TYPE" \
+    $MEMORY_OFF_FLAG \
+    $HYDE_CLI
 
 echo -e "\n${GREEN}✅ Тестирование завершено!${NC}"
 echo -e "Подробные логи и результаты сохранены в папке ${YELLOW}output/${NC}."

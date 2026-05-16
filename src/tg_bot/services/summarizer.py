@@ -7,22 +7,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
+from src.config.prompts import SUMMARIZATION_PROMPT
+
 logger = logging.getLogger(__name__)
-
-SUMMARIZATION_PROMPT = """Ты сжимаешь историю чата в краткое summary для последующей подсказки ассистенту.
-
-Ниже диалог, где каждая строка в формате:
-«Пользователь: …» или «Бот: …».
-
-{dialogue}
-
-Правила:
-- Выдай **один** сплошной абзац из **2–4 предложений**; не пиши длинее без крайней необходимости.
-- Сохрани ключевые факты, имена, сущности и обсуждаемые темы; опусти воду.
-- **Язык** summary — тот же, что и у реплик (русский диалог → summary по-русски).
-- **Строгий запрет на галлюцинации:** не добавляй факты, цифры, имена и выводы, которых **нет** в приведённом диалоге. Не додумывай за собеседников.
-- **Не** используй JSON, списки, markdown-заголовки, кавычки вокруг всего ответа; только готовый текст summary, без пояснений «вот summary:».
-"""
 
 
 class SummarizerService:

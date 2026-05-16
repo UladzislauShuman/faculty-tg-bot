@@ -8,13 +8,14 @@ from langchain_core.embeddings import Embeddings
 
 
 class E5QueryEmbeddings(Embeddings):
-    """Делегирует в base; для `embed_query` добавляет префикс E5."""
+    """Делегирует в base; для `embed_query` добавляет префикс E5, для `embed_documents` — passage."""
     def __init__(self, base_embeddings: Embeddings):
         self.base_embeddings = base_embeddings
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        # Документы векторизуются без изменений и мы добавляем префикс "passage:" на этапе индексации
-        return self.base_embeddings.embed_documents(texts)
+        # Добавляем префикс "passage:" перед отправкой в модель (текст в БД остается чистым)
+        prefixed_texts = [f"passage: {t}" for t in texts]
+        return self.base_embeddings.embed_documents(prefixed_texts)
 
     def embed_query(self, text: str) -> List[float]:
         # К поисковому запросу добавляется префикс

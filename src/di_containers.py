@@ -21,7 +21,11 @@ from src.pipelines.rag.pipeline import (
   create_generation_chain,
   get_llm_from_config,
 )
-from src.evaluation.metrics import FaithfulnessEvaluator, RelevanceEvaluator
+from src.evaluation.metrics import (
+    FaithfulnessEvaluator,
+    ReferenceSimilarityEvaluator,
+    RelevanceEvaluator,
+)
 
 # Импорты Чанкеров
 from src.parsing_and_chunking.chunkers.semantic_html_chunker import \
@@ -81,7 +85,7 @@ class Container(containers.DeclarativeContainer):
   unstructured_processor = providers.Factory(UnstructuredProcessor)
   semantic_processor = providers.Factory(ConfigurableProcessor,
                                          chunker=semantic_chunker)
-  
+
   parent_chunker = providers.Factory(
       ParentChildHTMLChunker,
       child_chunk_size=config.parent_document.child_chunk_size,
@@ -126,7 +130,7 @@ class Container(containers.DeclarativeContainer):
       chroma_bm25=chroma_bm25_retriever,
       qdrant=qdrant_retriever
   )
-  
+
   base_retriever = providers.Callable(
       _wrap_with_parent_retriever,
       base_retriever=raw_base_retriever,
@@ -201,6 +205,11 @@ class Container(containers.DeclarativeContainer):
   )
   relevance_evaluator = providers.Factory(
       RelevanceEvaluator,
+      llm=judge_llm,
+      timeout=config.evaluation_metrics.timeout_seconds,
+  )
+  reference_similarity_evaluator = providers.Factory(
+      ReferenceSimilarityEvaluator,
       llm=judge_llm,
       timeout=config.evaluation_metrics.timeout_seconds,
   )

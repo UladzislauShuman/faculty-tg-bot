@@ -199,6 +199,28 @@ docker-compose exec rag-cli alembic upgrade head
 
 ## Тестирование и эксперименты
 
+### Сравнение моделей (A/B тестирование)
+В скрипте `test.sh` встроена поддержка профилей моделей. Вы можете запускать тесты на старом стеке моделей, на новом, или на том, что прописан в `config.yaml`, не меняя сам конфиг.
+
+Для переключения профиля используйте переменную окружения `RAG_MODEL_PROFILE`:
+
+```bash
+# Запустить тесты на старом стеке (llama3.1, e5-large, DiTy reranker)
+RAG_MODEL_PROFILE=prev ./test.sh
+
+# Запустить тесты на новом стеке (qwen2.5, bge-m3, bge-reranker-v2)
+RAG_MODEL_PROFILE=new ./test.sh
+
+# Запустить тесты строго по настройкам из config.yaml
+RAG_MODEL_PROFILE=yaml ./test.sh
+```
+
+Также можно переопределять отдельные модели прямо при вызове Docker:
+```bash
+docker-compose exec -e RAG_OLLAMA_MODEL=mistral rag-cli python main.py test all
+```
+*Примечание: Если вы меняете модель эмбеддингов (`RAG_EMBEDDING_MODEL`), обязательно включайте переиндексацию (`--force-index`), иначе поиск по старой базе сломается.*
+
 Минимальный стек для прогонов без Telegram-бота: **Postgres**, **Qdrant**, **rag-cli**, плюс доступная **LLM** (контейнер `ollama` с профилем или нативная Ollama на хосте с корректным `OLLAMA_HOST`).
 
 Пример:

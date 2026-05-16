@@ -26,7 +26,7 @@ OLLAMA_URL=$(get_env_var "OLLAMA_HOST")
 OLLAMA_MODEL=$(get_env_var "OLLAMA_MODEL")
 
 # Если модель не указана, ставим дефолт
-if [ -z "$OLLAMA_MODEL" ]; then OLLAMA_MODEL="llama3.1"; fi
+if [ -z "$OLLAMA_MODEL" ]; then OLLAMA_MODEL="qwen2.5:14b-instruct-q4_K_M"; fi
 
 echo -e "      ${GREEN}✓ Конфигурация загружена: модель $OLLAMA_MODEL${NC}"
 
@@ -83,7 +83,7 @@ sleep 10
 while true; do
     # Перечитываем название модели из .env на каждой итерации
     OLLAMA_MODEL=$(get_env_var "OLLAMA_MODEL")
-    if [ -z "$OLLAMA_MODEL" ]; then OLLAMA_MODEL="llama3.1"; fi
+    if [ -z "$OLLAMA_MODEL" ]; then OLLAMA_MODEL="qwen2.5:14b-instruct-q4_K_M"; fi
 
     echo -e "\n${YELLOW}4/8. Загрузка модели $OLLAMA_MODEL...${NC}"
 
@@ -111,7 +111,7 @@ while true; do
         echo "Возможно, название указано неверно или отсутствует интернет-соединение."
         echo "------------------------------------------------------------------"
         echo "1) Я исправлю название в .env и попробую снова"
-        echo "2) Использовать проверенную модель по умолчанию (llama3.1)"
+        echo "2) Использовать проверенную модель по умолчанию (qwen2.5:14b-instruct-q4_K_M)"
         echo "3) Прервать установку"
         read -p "Выберите вариант [1-3]: " model_choice
 
@@ -122,10 +122,10 @@ while true; do
                 continue # Возврат в начало цикла
                 ;;
             2)
-                # Меняем модель в .env на llama3.1 (совместимо с macOS и Linux)
-                sed -i.bak "s/^OLLAMA_MODEL=.*/OLLAMA_MODEL=llama3.1/" .env && rm .env.bak || \
-                sed -i "s/^OLLAMA_MODEL=.*/OLLAMA_MODEL=llama3.1/" .env
-                echo -e "${YELLOW}Модель в .env изменена на llama3.1. Повторяю загрузку...${NC}"
+                # Меняем модель в .env на qwen2.5:14b-instruct-q4_K_M (совместимо с macOS и Linux)
+                sed -i.bak "s/^OLLAMA_MODEL=.*/OLLAMA_MODEL=qwen2.5:14b-instruct-q4_K_M/" .env && rm .env.bak || \
+                sed -i "s/^OLLAMA_MODEL=.*/OLLAMA_MODEL=qwen2.5:14b-instruct-q4_K_M/" .env
+                echo -e "${YELLOW}Модель в .env изменена на qwen2.5:14b-instruct-q4_K_M. Повторяю загрузку...${NC}"
                 continue
                 ;;
             *)

@@ -1,4 +1,4 @@
-"""LLM-judge для evaluation: парсинг JSON (EvalScore) и два помощника — faithfulness / relevance."""
+"""LLM-judge для evaluation: парсинг JSON (EvalScore), faithfulness, relevance и similarity к эталону."""
 
 import asyncio
 import json
@@ -11,7 +11,11 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from pydantic import ValidationError
 
-from src.evaluation.prompts import FAITHFULNESS_SYSTEM_PROMPT, RELEVANCE_SYSTEM_PROMPT
+from src.config.prompts import (
+    FAITHFULNESS_SYSTEM_PROMPT,
+    REFERENCE_SIMILARITY_SYSTEM_PROMPT,
+    RELEVANCE_SYSTEM_PROMPT,
+)
 from src.evaluation.schemas import EvalScore
 
 logger = logging.getLogger(__name__)
@@ -138,6 +142,67 @@ class RelevanceEvaluator:
     except (json.JSONDecodeError, ValueError, ValidationError) as e:
       logger.warning(
           "Relevance parse error: %s; raw (truncated)=%r",
+          e,
+          (raw_s[:200] if raw_s else ""),
+      )
+      return EvalScore(
+          score=0.0,
+          reason=f"Parse error: {raw_s[:100]}",
+      )
+
+
+class ReferenceSimilarityEvaluator:
+  """Судья «близость ответа к эталону»: вопрос + эталон + ответ бота."""
+
+  def __init__(self, llm: BaseLanguageModel, timeout: int = 60) -> None:
+    self._chain = (
+        PromptTemplate.from_template(REFERENCE_SIMILARITY_SYSTEM_PROMPT)
+        | llm
+        | StrOutputParser()
+    )
+    self._timeout = timeout
+
+  async def aevaluate(
+      self,
+      question: str,
+      reference_answer: str,
+      answer: str,
+  ) -> EvalScore:
+    """
+    Оценивает согласованность answer с reference_answer при вопросе question.
+    Возвращает EvalScore(score=0.0, reason="...") при любой ошибке.
+    """
+    try:
+      raw: Any = await asyncio.wait_for(
+          self._chain.ainvoke(
+              {
+                  "reference": reference_answer,
+                  "answer": answer,
+              }
+          ),
+          timeout=self._timeout,
+      )
+    except asyncio.TimeoutError:
+      logger.warning(
+          "Reference similarity evaluation timeout after %s s", self._timeout
+      )
+      return EvalScore(
+          score=0.0,
+          reason="Timeout: LLM did not respond in time",
+      )
+    except Exception as e:  # noqa: BLE001
+      logger.warning("Reference similarity evaluation failed: %s", e)
+      return EvalScore(
+          score=0.0,
+          reason=f"Error: {type(e).__name__}: {e!s}"[:500],
+      )
+
+    raw_s = raw if isinstance(raw, str) else str(raw)
+    try:
+      return _eval_score_from_llm_string(raw_s)
+    except (json.JSONDecodeError, ValueError, ValidationError) as e:
+      logger.warning(
+          "Reference similarity parse error: %s; raw (truncated)=%r",
           e,
           (raw_s[:200] if raw_s else ""),
       )

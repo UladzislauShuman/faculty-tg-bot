@@ -19,19 +19,12 @@ from langchain_core.prompts import PromptTemplate
 
 from src.retrievers.hyde_trace_context import hyde_trace_append
 
+from src.config.prompts import HYDE_PROMPT
+
 logger = logging.getLogger(__name__)
 
 _PREVIEW_Q = 300
 _PREVIEW_H = 900
-
-HYDE_PROMPT = """Ты — справочная система ФПМИ БГУ. На основе вопроса ниже
-напиши короткий фрагмент (2–3 предложения), который мог бы быть
-ответом на этот вопрос на официальном сайте факультета.
-Пиши официальным стилем. НЕ придумывай конкретных имён или дат.
-
-Вопрос: {question}
-
-Фрагмент:"""
 
 _HYDE_PROMPT_TEMPLATE = PromptTemplate(
     template=HYDE_PROMPT,

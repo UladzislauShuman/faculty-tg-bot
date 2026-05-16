@@ -11,6 +11,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import Runnable
 
+from src.config.prompts import ROUTER_SYSTEM_PROMPT, ROUTER_HUMAN_PROMPT
+
 logger = logging.getLogger(__name__)
 
 RouteLabel = Literal["smalltalk", "direct_link", "rag"]
@@ -27,24 +29,8 @@ _DEFAULT_DIRECT_LINK = (
 
 _ROUTER_PROMPT = ChatPromptTemplate.from_messages(
     [
-        (
-            "system",
-            "Ты классификатор намерений пользователя. Ответь ровно одним словом "
-            "из набора: smalltalk, direct_link, rag. Без пояснений.",
-        ),
-        (
-            "human",
-            "Категории:\n"
-            "- smalltalk: приветствия, благодарность без фактического вопроса, "
-            "прощание, «как дела» без запроса данных о факультете\n"
-            "- direct_link: просьба дать ссылку, сайт, URL; где посмотреть "
-            "расписание; официальный сайт\n"
-            "- rag: любые фактические вопросы о факультете, декане, баллах, "
-            "поступлении, правилах; также уточняющие вопросы по уже обсуждаемым "
-            "фактам («сколько это лет?», «к какому году?»)\n\n"
-            "Сообщение: {query}\n"
-            "Класс:",
-        ),
+        ("system", ROUTER_SYSTEM_PROMPT),
+        ("human", ROUTER_HUMAN_PROMPT),
     ]
 )
 

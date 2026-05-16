@@ -36,10 +36,14 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-CONTEXTUALIZE_Q_SYSTEM_PROMPT = """Учитывая историю чата и последний вопрос пользователя, \
-который может ссылаться на контекст в истории чата, сформулируй самостоятельный вопрос, \
-который можно понять без истории чата. НЕ отвечай на вопрос, просто переформулируй его, если нужно, \
-иначе верни как есть."""
+from src.config.prompts import (
+    CONTEXTUALIZE_Q_SYSTEM_PROMPT,
+    QA_HUMAN_PROMPT,
+    QA_SYSTEM_PROMPT,
+    CHAT_ONLY_SMALLTALK_SYSTEM,
+    CHAT_ONLY_DIRECT_SYSTEM,
+    PROMPT_TEMPLATE,
+)
 
 contextualize_q_prompt = ChatPromptTemplate.from_messages([
     ("system", CONTEXTUALIZE_Q_SYSTEM_PROMPT),
@@ -47,44 +51,12 @@ contextualize_q_prompt = ChatPromptTemplate.from_messages([
     ("human", "{input}"),
 ])
 
-QA_SYSTEM_PROMPT = """Ты — официальный ассистент ФПМИ БГУ. Отвечай ТОЛЬКО на основе контекста ниже.
-
-КОНТЕКСТ:
-{context}
-
-ИНСТРУКЦИЯ:
-1. Если в контексте нет точного ответа, ответь: "К сожалению, в базе знаний нет информации по вашему вопросу."
-2. Не придумывай факты, телефоны или имена.
-3. После каждого факта указывай источник в скобках.
-"""
-
 qa_prompt = ChatPromptTemplate.from_messages([
     ("system", QA_SYSTEM_PROMPT),
     MessagesPlaceholder("chat_history"),
-    ("human", "{input}"),
+    ("human", QA_HUMAN_PROMPT),
 ])
 
-CHAT_ONLY_SMALLTALK_SYSTEM = """Ты — дружелюбный ассистент ФПМИ БГУ в Telegram. Отвечай по-русски, кратко и естественно.
-Опирайся на историю диалога: продолжай тему, используй факты, которые пользователь уже видел в этой беседе (например посчитай разницу лет, если год основания или другая дата уже обсуждались).
-Не придумывай новые конкретные факты о факультете (имена, даты с сайта), если их не было в переписке — тогда предложи задать отдельный вопрос про факультет, чтобы подключился поиск по базе знаний."""
-
-CHAT_ONLY_DIRECT_SYSTEM = """Ты — ассистент ФПМИ БГУ. Пользователь просит ссылку или где что посмотреть.
-Учитывай историю диалога. Официальный сайт: https://fpmi.bsu.by — кратко направь к разделам (расписание, новости, поступление). Если ссылку уже давали — ответ можно короче."""
-
-PROMPT_TEMPLATE = """
-Ты — официальный ассистент ФПМИ БГУ. Отвечай ТОЛЬКО на основе контекста ниже.
-
-КОНТЕКСТ:
-{context}
-
-ИНСТРУКЦИЯ:
-1. Если в контексте нет точного ответа, ответь: "К сожалению, в базе знаний нет информации по вашему вопросу."
-2. Не придумывай факты, телефоны или имена.
-3. После каждого факта указывай источник в скобках, например: (Источник: Деканат).
-
-ВОПРОС: {question}
-ОТВЕТ:
-"""
 
 def create_retrieval_chain_test(config: dict, retriever: BaseRetriever) -> Runnable:
     """Оставляем для тестов (rag-cli retrieve)"""
@@ -99,11 +71,14 @@ def get_llm_from_config(provider_config: dict):
         provider_config = dict(provider_config)
     provider_type = provider_config.get("type")
     if provider_type == "ollama":
-        return Ollama(
-            model=provider_config.get("model"),
-            base_url=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
-            temperature=provider_config.get("temperature", 0.7),
-        )
+        ollama_kwargs = {
+            "model": provider_config.get("model"),
+            "base_url": os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+            "temperature": provider_config.get("temperature", 0.7),
+        }
+        if "num_ctx" in provider_config:
+            ollama_kwargs["num_ctx"] = provider_config.get("num_ctx")
+        return Ollama(**ollama_kwargs)
     elif provider_type == "yandex_gpt":
         secret_key = os.getenv("YANDEX_GPT_SECRET")
         if not secret_key:
@@ -211,6 +186,36 @@ def create_generation_chain(config: dict) -> Runnable:
     prompt = PromptTemplate.from_template(PROMPT_TEMPLATE)
     return prompt | llm | StrOutputParser()
 
+def _save_prompt_to_file(inputs: dict, prompt: ChatPromptTemplate) -> None:
+    try:
+        import datetime
+        import re
+        import os
+        from langchain_core.documents import Document
+        
+        # Подготавливаем копию inputs, чтобы правильно отформатировать context (список Document -> строка)
+        format_inputs = inputs.copy()
+        if "context" in format_inputs and isinstance(format_inputs["context"], list):
+            docs = format_inputs["context"]
+            if all(isinstance(d, Document) for d in docs):
+                format_inputs["context"] = "\n\n".join(d.page_content for d in docs)
+                
+        messages = prompt.format_messages(**format_inputs)
+        question = inputs.get("input", "unknown")
+        slug = re.sub(r'[^a-zA-Zа-яА-Я0-9]', '_', question)[:30]
+        dt = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{dt}_{slug}.txt"
+        
+        out_dir = "output/prompts"
+        os.makedirs(out_dir, exist_ok=True)
+        filepath = os.path.join(out_dir, filename)
+        
+        with open(filepath, "w", encoding="utf-8") as f:
+            for msg in messages:
+                f.write(f"--- {msg.type.upper()} ---\n{msg.content}\n\n")
+    except Exception as e:
+        logger.warning("Не удалось сохранить промпт: %s", e)
+
 def create_rag_chain(
     config: dict,
     retriever: BaseRetriever,
@@ -233,6 +238,7 @@ def create_rag_chain(
     llm = get_llm_from_config(provider_config)
 
     timing = stage_timing_logs_enabled(config)
+    save_prompts = config.get("rag_pipeline", {}).get("save_prompts", {}).get("enabled", False)
 
     # 1. Умный ретривер (переформулирует вопрос с учетом истории)
     if timing:
@@ -248,26 +254,32 @@ def create_rag_chain(
     question_answer_chain = create_stuff_documents_chain(llm, qa_prompt)
 
     # 3. Общая RAG-цепочка (Поиск + Ответ)
-    if timing:
-        def _gen_sync(inputs: dict, config: RunnableConfig) -> str:
+    if timing or save_prompts:
+        def _gen_sync(inputs: dict, config: RunnableConfig | None = None) -> str:
+            if save_prompts:
+                _save_prompt_to_file(inputs, qa_prompt)
             t0 = time.perf_counter()
             try:
                 return question_answer_chain.invoke(inputs, config)
             finally:
-                logger.info(
-                    "[TIMING] stage=generation elapsed=%.2fs",
-                    time.perf_counter() - t0,
-                )
+                if timing:
+                    logger.info(
+                        "[TIMING] stage=generation elapsed=%.2fs",
+                        time.perf_counter() - t0,
+                    )
 
-        async def _gen_async(inputs: dict, config: RunnableConfig) -> str:
+        async def _gen_async(inputs: dict, config: RunnableConfig | None = None) -> str:
+            if save_prompts:
+                _save_prompt_to_file(inputs, qa_prompt)
             t0 = time.perf_counter()
             try:
                 return await question_answer_chain.ainvoke(inputs, config)
             finally:
-                logger.info(
-                    "[TIMING] stage=generation elapsed=%.2fs",
-                    time.perf_counter() - t0,
-                )
+                if timing:
+                    logger.info(
+                        "[TIMING] stage=generation elapsed=%.2fs",
+                        time.perf_counter() - t0,
+                    )
 
         timed_answer = RunnableLambda(_gen_sync, afunc=_gen_async)
         rag_chain = (
@@ -336,7 +348,21 @@ def create_chat_only_chain(
       MessagesPlaceholder("chat_history"),
       ("human", "{input}"),
   ])
-  llm_branch = chat_prompt | llm | StrOutputParser()
+  
+  save_prompts = config.get("rag_pipeline", {}).get("save_prompts", {}).get("enabled", False)
+  if save_prompts:
+      def _chat_sync(inputs: dict, config_run: RunnableConfig | None = None) -> str:
+          _save_prompt_to_file(inputs, chat_prompt)
+          return (chat_prompt | llm | StrOutputParser()).invoke(inputs, config_run)
+
+      async def _chat_async(inputs: dict, config_run: RunnableConfig | None = None) -> str:
+          _save_prompt_to_file(inputs, chat_prompt)
+          return await (chat_prompt | llm | StrOutputParser()).ainvoke(inputs, config_run)
+
+      llm_branch = RunnableLambda(_chat_sync, afunc=_chat_async)
+  else:
+      llm_branch = chat_prompt | llm | StrOutputParser()
+
   core = (
       RunnableLambda(_inject_non_rag_system_prompt)
       | RunnablePassthrough.assign(answer=llm_branch)
